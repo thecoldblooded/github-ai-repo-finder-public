@@ -1,612 +1,594 @@
-/**
- * popup.js
- * Main UI Logic and Event Controller for GitHub AI Repo Finder Chrome Extension
- */
-
-document.addEventListener("DOMContentLoaded", async () => {
-  // --- DOM Elements ---
-  const viewSearch = document.getElementById("view-search");
-  const viewSettings = document.getElementById("view-settings");
-
-  const btnToggleSettings = document.getElementById("btn-toggle-settings");
-  const btnCloseSettings = document.getElementById("btn-close-settings");
-  const btnToggleTheme = document.getElementById("btn-toggle-theme");
-
-  const aiStatusBadge = document.getElementById("ai-status-badge");
-  const searchInput = document.getElementById("search-input");
-  const btnClearSearch = document.getElementById("btn-clear-search");
-  const btnAiSearch = document.getElementById("btn-ai-search");
-
-  const chkAiMode = document.getElementById("chk-ai-mode");
-  const chipAiMode = document.getElementById("chip-ai-mode");
-  const repoCountIndicator = document.getElementById("repo-count-indicator");
-  const langFilterSelect = document.getElementById("lang-filter-select");
-
-  const aiInsightBanner = document.getElementById("ai-insight-banner");
-  const aiInsightText = document.getElementById("ai-insight-text");
-
-  const loadingState = document.getElementById("loading-state");
-  const emptyState = document.getElementById("empty-state");
-  const noResultsState = document.getElementById("no-results-state");
-  const repoListContainer = document.getElementById("repo-list");
-
-  // Settings DOM
-  const inputGithubToken = document.getElementById("input-github-token");
-  const chkIncludePrivate = document.getElementById("chk-include-private");
-  const chkIncludeForks = document.getElementById("chk-include-forks");
-  const chkIncludeStarred = document.getElementById("chk-include-starred");
-  const btnToggleGithubToken = document.getElementById("btn-toggle-github-token");
-
-  const inputAiEndpoint = document.getElementById("input-ai-endpoint");
-  const inputAiKey = document.getElementById("input-ai-key");
-  const inputAiModel = document.getElementById("input-ai-model");
-  const btnToggleAiKey = document.getElementById("btn-toggle-ai-key");
-  const btnTestAi = document.getElementById("btn-test-ai");
-
-  const syncLastTime = document.getElementById("sync-last-time");
-  const syncRepoTotal = document.getElementById("sync-repo-total");
-  const btnSyncGithub = document.getElementById("btn-sync-github");
-  const btnClearCache = document.getElementById("btn-clear-cache");
-  const btnSaveSettings = document.getElementById("btn-save-settings");
-
-  const toast = document.getElementById("toast");
-
-  // --- State Variables ---
-  let appSettings = {
-    githubToken: "",
-    includePrivate: true,
-    includeForks: true,
-    includeStarred: false,
-    aiEndpoint: "",
-    aiKey: "",
-    aiModel: "gpt-3.5-turbo",
-    theme: "dark"
-  };
-
-  let cachedRepos = [];
-  let currentFilter = "all";
-  let currentLang = "";
-
-  // Language Colors Dictionary
-  const langColors = {
-    "JavaScript": "#f1e05a",
-    "TypeScript": "#3178c6",
-    "Python": "#3572A5",
-    "HTML": "#e34c26",
-    "CSS": "#563d7c",
-    "Vue": "#41b883",
-    "React": "#61dafb",
-    "Go": "#00ADD8",
-    "Rust": "#dea584",
-    "C++": "#f34b7d",
-    "C#": "#178600",
-    "PHP": "#4F5D95",
-    "Java": "#b07219",
-    "Ruby": "#701516",
-    "Swift": "#F05138",
-    "Kotlin": "#A97BFF",
-    "Dart": "#00B4AB",
-    "Shell": "#89e051"
-  };
-
-  function applyTheme(theme) {
-    appSettings.theme = theme || "dark";
-    document.documentElement.setAttribute("data-theme", appSettings.theme);
-    document.body.setAttribute("data-theme", appSettings.theme);
-
-    const sunIcon = document.querySelector(".theme-icon-sun");
-    const moonIcon = document.querySelector(".theme-icon-moon");
-    if (sunIcon && moonIcon) {
-      if (appSettings.theme === "light") {
-        sunIcon.classList.remove("hidden");
-        moonIcon.classList.add("hidden");
-      } else {
-        sunIcon.classList.add("hidden");
-        moonIcon.classList.remove("hidden");
-      }
-    }
-  }
-
-  // --- Storage Helper Functions ---
-  async function loadSettings() {
-    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-      const data = await chrome.storage.local.get(["gitai_settings"]);
-      if (data.gitai_settings) {
-        appSettings = { ...appSettings, ...data.gitai_settings };
-      }
-    } else {
-      const raw = localStorage.getItem("gitai_settings");
-      if (raw) {
-        appSettings = { ...appSettings, ...JSON.parse(raw) };
-      }
-    }
-
-    // Apply active theme
-    applyTheme(appSettings.theme);
-
-    // Populate Settings UI
-    inputGithubToken.value = appSettings.githubToken || "";
-    chkIncludePrivate.checked = appSettings.includePrivate;
-    if (chkIncludeForks) chkIncludeForks.checked = appSettings.includeForks !== false;
-    chkIncludeStarred.checked = appSettings.includeStarred;
-
-    inputAiEndpoint.value = appSettings.aiEndpoint || "";
-    inputAiKey.value = appSettings.aiKey || "";
-    inputAiModel.value = appSettings.aiModel || "gpt-3.5-turbo";
-
-    updateAiStatusBadge();
-  }
-
-  async function saveSettingsToStorage() {
-    appSettings.githubToken = inputGithubToken.value.trim();
-    appSettings.includePrivate = chkIncludePrivate.checked;
-    if (chkIncludeForks) appSettings.includeForks = chkIncludeForks.checked;
-    appSettings.includeStarred = chkIncludeStarred.checked;
-
-    appSettings.aiEndpoint = inputAiEndpoint.value.trim();
-    appSettings.aiKey = inputAiKey.value.trim();
-    appSettings.aiModel = inputAiModel.value.trim() || "gpt-3.5-turbo";
-
-    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-      await chrome.storage.local.set({ gitai_settings: appSettings });
-    } else {
-      localStorage.setItem("gitai_settings", JSON.stringify(appSettings));
-    }
-
-    updateAiStatusBadge();
-    showToast("Ayarlar başarıyla kaydedildi!", "success");
-  }
-
-  function updateAiStatusBadge() {
-    if (appSettings.aiEndpoint && appSettings.aiEndpoint.trim()) {
-      aiStatusBadge.className = "status-badge active";
-      aiStatusBadge.querySelector(".text").textContent = "YZ Aktif";
-    } else {
-      aiStatusBadge.className = "status-badge inactive";
-      aiStatusBadge.querySelector(".text").textContent = "Dahili Arama";
-    }
-  }
-
-  // --- Load Repos Cache ---
-  async function refreshCacheUI() {
-    const cacheData = await GitHubService.getCache();
-    if (cacheData && cacheData.repos) {
-      cachedRepos = cacheData.repos;
-      repoCountIndicator.textContent = `${cachedRepos.length} repo senkronize`;
-      syncRepoTotal.textContent = `${cachedRepos.length} repo kayıtlı`;
-      
-      if (cacheData.lastSynced) {
-        const d = new Date(cacheData.lastSynced);
-        syncLastTime.textContent = `Son Senkronizasyon: ${d.toLocaleDateString('tr-TR')} ${d.toLocaleTimeString('tr-TR', {hour: '2-digit', minute:'2-digit'})}`;
-      }
-
-      populateLanguageDropdown(cachedRepos);
-    } else {
-      cachedRepos = [];
-      repoCountIndicator.textContent = "0 repo senkronize";
-      syncRepoTotal.textContent = "0 repo kayıtlı";
-      syncLastTime.textContent = "Son Senkronizasyon: Henüz yapılmadı";
-    }
-  }
-
-  function populateLanguageDropdown(repos) {
-    const langs = new Set();
-    repos.forEach(r => {
-      if (r.language && r.language !== "Bilinmiyor") {
-        langs.add(r.language);
-      }
-    });
-
-    langFilterSelect.innerHTML = '<option value="">Tüm Diller</option>';
-    Array.from(langs).sort().forEach(lang => {
-      const opt = document.createElement("option");
-      opt.value = lang;
-      opt.textContent = lang;
-      if (lang === currentLang) opt.selected = true;
-      langFilterSelect.appendChild(opt);
-    });
-  }
-
-  // --- Search Execution ---
-  async function handleSearch() {
-    const query = searchInput.value.trim();
-
-    if (!query) {
-      aiInsightBanner.classList.add("hidden");
-      loadingState.classList.add("hidden");
-      noResultsState.classList.add("hidden");
-      repoListContainer.innerHTML = "";
-      emptyState.classList.remove("hidden");
-      return;
-    }
-
-    if (cachedRepos.length === 0) {
-      showToast("Lütfen önce Ayarlar'dan GitHub repolarınızı senkronize edin!", "error");
-      switchView("settings");
-      return;
-    }
-
-    // Show loading UI
-    emptyState.classList.add("hidden");
-    noResultsState.classList.add("hidden");
-    repoListContainer.innerHTML = "";
-    loadingState.classList.remove("hidden");
-    aiInsightBanner.classList.add("hidden");
-
-    try {
-      let results;
-
-      if (chkAiMode.checked) {
-        results = await AIService.searchRepositories(query, cachedRepos, {
-          endpoint: appSettings.aiEndpoint,
-          apiKey: appSettings.aiKey,
-          model: appSettings.aiModel
-        });
-      } else {
-        results = AIService.smartFallbackSearch(query, cachedRepos);
-      }
-
-      loadingState.classList.add("hidden");
-
-      if (results.reasoning) {
-        aiInsightText.textContent = results.reasoning;
-        aiInsightBanner.classList.remove("hidden");
-      }
-
-      renderRepoResults(results.matchedRepos);
-
-    } catch (err) {
-      console.error("Search error:", err);
-      loadingState.classList.add("hidden");
-      showToast("Arama yapılırken hata oluştu: " + err.message, "error");
-    }
-  }
-
-  // --- Render Repo Cards ---
-  function renderRepoResults(reposList) {
-    // Apply UI Category Filter & Language Filter
-    let filtered = reposList.filter(repo => {
-      if (currentFilter === "public" && repo.isPrivate) return false;
-      if (currentFilter === "private" && !repo.isPrivate) return false;
-      if (currentFilter === "starred" && !repo.isStarred) return false;
-      if (currentFilter === "original" && repo.isFork) return false;
-      if (currentFilter === "forks" && !repo.isFork) return false;
-      if (currentLang && repo.language !== currentLang) return false;
-      if (appSettings.includeForks === false && repo.isFork && currentFilter !== "forks") return false;
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      noResultsState.classList.remove("hidden");
-      repoListContainer.innerHTML = "";
-      return;
-    }
-
-    noResultsState.classList.add("hidden");
-    repoListContainer.innerHTML = "";
-
-    filtered.forEach(repo => {
-      const card = document.createElement("div");
-      card.className = "repo-card";
-
-      const langColor = langColors[repo.language] || "#8b949e";
-      const timeAgo = formatTimeAgo(repo.updatedAt);
-
-      const privacyBadge = repo.isPrivate 
-        ? `<span class="privacy-badge private">🔒 Private</span>`
-        : `<span class="privacy-badge public">🌐 Public</span>`;
-
-      const forkBadge = repo.isFork
-        ? `<span class="privacy-badge fork">🍴 Fork</span>`
-        : "";
-
-      const relevanceTag = repo.aiScore 
-        ? `<span class="relevance-badge">%${repo.aiScore} Eşleşti</span>`
-        : "";
-
-      const topicsHtml = (repo.topics || []).slice(0, 4).map(t => `<span class="topic-tag">#${t}</span>`).join("");
-      const displayName = repo.fullName || repo.name;
-
-      card.innerHTML = `
-        <div class="repo-card-header">
-          <a href="${repo.htmlUrl}" target="_blank" class="repo-name-link" title="${escapeHtml(displayName)} (GitHub'da aç)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-            <span>${escapeHtml(displayName)}</span>
-          </a>
-          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-            ${relevanceTag}
-            ${forkBadge}
-            ${privacyBadge}
-          </div>
-        </div>
-
-        ${(repo.trDescription || repo.description) ? `<p class="repo-desc" title="Orijinal: ${escapeHtml(repo.description)}">${escapeHtml(repo.trDescription || repo.description)}</p>` : ""}
-
-        ${topicsHtml ? `<div class="repo-topics">${topicsHtml}</div>` : ""}
-
-        ${repo.aiReason ? `<div style="font-size:11px; color:#a5b4fc; background:rgba(99,102,241,0.08); padding:3px 6px; border-radius:4px;">💡 ${escapeHtml(repo.aiReason)}</div>` : ""}
-
-        <div class="repo-meta">
-          <div class="meta-left">
-            <span>
-              <span class="lang-dot" style="background-color: ${langColor}"></span>
-              ${repo.language}
-            </span>
-            ${repo.stargazersCount > 0 ? `<span>⭐ ${repo.stargazersCount}</span>` : ""}
-            <span>🕒 ${timeAgo}</span>
-          </div>
-
-          <div class="actions-right">
-            <button class="btn-icon-action btn-copy-url" data-url="${repo.htmlUrl}" title="GitHub Linkini Kopyala">
-              📋 Link
-            </button>
-            <button class="btn-icon-action btn-copy-clone" data-clone="${repo.cloneUrl}" title="Git Clone Komutunu Kopyala">
-              ⚡ Clone
-            </button>
-          </div>
-        </div>
-      `;
-
-      repoListContainer.appendChild(card);
-    });
-
-    // Attach card action listeners
-    repoListContainer.querySelectorAll(".btn-copy-url").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(btn.dataset.url);
-        showToast("GitHub URL kopyalandı!", "success");
-      });
-    });
-
-    repoListContainer.querySelectorAll(".btn-copy-clone").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(`git clone ${btn.dataset.clone}`);
-        showToast("Git clone komutu kopyalandı!", "success");
-      });
-    });
-  }
-
-  // --- View Switcher ---
-  function switchView(target) {
-    if (target === "settings") {
-      viewSearch.classList.remove("active");
-      viewSettings.classList.add("active");
-    } else {
-      viewSettings.classList.remove("active");
-      viewSearch.classList.add("active");
-    }
-  }
-
-  // --- Event Listeners ---
-  btnToggleSettings.addEventListener("click", () => switchView("settings"));
-  btnCloseSettings.addEventListener("click", () => switchView("search"));
-
-  const btnOpenSidepanel = document.getElementById("btn-open-sidepanel");
-  if (btnOpenSidepanel) {
-    btnOpenSidepanel.addEventListener("click", async () => {
-      if (typeof chrome !== "undefined" && chrome.sidePanel && chrome.sidePanel.open) {
-        try {
-          const window = await chrome.windows.getCurrent();
-          await chrome.sidePanel.open({ windowId: window.id });
-          window.close();
-        } catch (e) {
-          console.error("Side panel open error:", e);
-          showToast("Yan paneli açmak için Chrome simgesine sağ tıklayıp 'Yan paneli aç' diyebilirsiniz.", "info");
-        }
-      } else {
-        showToast("Yan panel özelliği Chrome V114+ tarafından desteklenmektedir.", "info");
-      }
-    });
-  }
-
-  btnToggleTheme.addEventListener("click", async () => {
-    const nextTheme = appSettings.theme === "light" ? "dark" : "light";
-    applyTheme(nextTheme);
-    await saveSettingsToStorage();
-    showToast(`Tema ${nextTheme === "light" ? "Açık (Light)" : "Koyu (Dark)"} moduna geçildi`, "success");
-  });
-
-  // Clear Search button
-  searchInput.addEventListener("input", () => {
-    if (searchInput.value.trim()) {
-      btnClearSearch.classList.remove("hidden");
-    } else {
-      btnClearSearch.classList.add("hidden");
-      handleSearch();
-    }
-  });
-
-  btnClearSearch.addEventListener("click", () => {
-    searchInput.value = "";
-    btnClearSearch.classList.add("hidden");
-    handleSearch();
-  });
-
-  searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSearch();
-    }
-  });
-
-  btnAiSearch.addEventListener("click", handleSearch);
-
-  // Example Prompt badges
-  document.querySelectorAll(".prompt-badge").forEach(badge => {
-    badge.addEventListener("click", () => {
-      searchInput.value = badge.dataset.prompt;
-      btnClearSearch.classList.remove("hidden");
-      handleSearch();
-    });
-  });
-
-  // Filter chips
-  document.querySelectorAll(".filter-chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      document.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
-      chip.classList.add("active");
-      currentFilter = chip.dataset.filter;
-      handleSearch();
-    });
-  });
-
-  langFilterSelect.addEventListener("change", (e) => {
-    currentLang = e.target.value;
-    handleSearch();
-  });
-
-  // Toggle AI Chip
-  chipAiMode.addEventListener("click", () => {
-    chkAiMode.checked = !chkAiMode.checked;
-    chipAiMode.classList.toggle("active", chkAiMode.checked);
-    handleSearch();
-  });
-
-  // Password Toggles
-  btnToggleGithubToken.addEventListener("click", () => {
-    inputGithubToken.type = inputGithubToken.type === "password" ? "text" : "password";
-  });
-  btnToggleAiKey.addEventListener("click", () => {
-    inputAiKey.type = inputAiKey.type === "password" ? "text" : "password";
-  });
-
-  // Test AI Connection
-  btnTestAi.addEventListener("click", async () => {
-    const endpoint = inputAiEndpoint.value.trim();
-    const apiKey = inputAiKey.value.trim();
-    const model = inputAiModel.value.trim();
-
-    if (!endpoint) {
-      showToast("Lütfen önce Endpoint URL girin!", "error");
-      return;
-    }
-
-    btnTestAi.textContent = "Bağlanıyor...";
-    btnTestAi.disabled = true;
-
-    const res = await AIService.testConnection(endpoint, apiKey, model);
-    btnTestAi.textContent = "⚡ YZ Bağlantısını Test Et";
-    btnTestAi.disabled = false;
-
-    if (res.success) {
-      showToast(res.message, "success");
-    } else {
-      showToast(res.message, "error");
-    }
-  });
-
-  // Sync Repos Now
-  btnSyncGithub.addEventListener("click", async () => {
-    const token = inputGithubToken.value.trim();
-    if (!token) {
-      showToast("Lütfen geçerli bir GitHub PAT girin!", "error");
-      return;
-    }
-
-    btnSyncGithub.textContent = "Senkronize Ediliyor...";
-    btnSyncGithub.disabled = true;
-
-    try {
-      const repos = await GitHubService.fetchAllRepositories(token, {
-        includePrivate: chkIncludePrivate.checked,
-        includeStarred: chkIncludeStarred.checked
-      });
-
-      await refreshCacheUI();
-      showToast(`${repos.length} repo başarıyla çekildi ve saklandı!`, "success");
-    } catch (err) {
-      console.error("Sync error:", err);
-      showToast("GitHub Senkronizasyon hatası: " + err.message, "error");
-    } finally {
-      btnSyncGithub.textContent = "🔄 Repoları Şimdi Senkronize Et";
-      btnSyncGithub.disabled = false;
-    }
-  });
-
-  // Clear Cache
-  btnClearCache.addEventListener("click", async () => {
-    await GitHubService.clearCache();
-    await refreshCacheUI();
-    showToast("Önbellek temizlendi.", "success");
-  });
-
-  // Save Settings Button
-  btnSaveSettings.addEventListener("click", async () => {
-    await saveSettingsToStorage();
-    switchView("search");
-  });
-
-  // --- Utility Functions ---
-  function showToast(message, type = "info") {
-    toast.textContent = message;
-    toast.className = `toast show ${type}`;
-    setTimeout(() => {
-      toast.className = "toast hidden";
-    }, 3500);
-  }
-
-  function formatTimeAgo(isoString) {
-    if (!isoString) return "";
-    const date = new Date(isoString);
-    const now = new Date();
-    const seconds = Math.floor((now - date) / 1000);
-
-    if (seconds < 3600) return "az önce";
-    const hours = Math.floor(seconds / 3600);
-    if (hours < 24) return `${hours}sa önce`;
-    const days = Math.floor(hours / 24);
-    if (days < 30) return `${days}gün önce`;
-    const months = Math.floor(days / 30);
-    if (months < 12) return `${months}ay önce`;
-    return `${Math.floor(months / 12)}yıl önce`;
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  // --- Initialize ---
-  let isSidePanel = false;
-  try {
-    if (typeof chrome !== "undefined" && chrome.extension && chrome.extension.getViews) {
-      const popups = chrome.extension.getViews({ type: "popup" });
-      isSidePanel = !popups.includes(window);
-    } else {
-      isSidePanel = window.location.search.includes('sidepanel');
-    }
-  } catch (e) {
-    isSidePanel = window.location.search.includes('sidepanel');
-  }
-
-  if (isSidePanel) {
-    document.body.classList.add("is-sidepanel");
-  } else {
-    document.body.classList.add("is-popup");
-  }
-
-  const versionTag = document.getElementById("version-tag");
-  if (versionTag && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-    try {
-      const manifest = chrome.runtime.getManifest();
-      versionTag.textContent = `v${manifest.version}`;
-    } catch (e) {
-      console.warn("Could not read manifest version:", e);
-    }
-  }
-
-  await loadSettings();
-  await refreshCacheUI();
-
-  // If no repos cached yet, open settings automatically to guide user
-  if (cachedRepos.length === 0) {
-    switchView("settings");
-  }
+"use strict";
+
+const SETTINGS_KEY = "repo_finder_settings";
+const AUTH_KEY = "repo_finder_auth";
+const DEFAULT_SETTINGS = Object.freeze({
+  theme: "system",
+  includePrivate: false,
+  includeStarred: false,
+  includeForks: true,
+  includeArchived: false,
+  apiEnabled: false,
+  apiEndpoint: "",
+  apiKey: "",
+  apiModel: "gpt-4o-mini"
 });
+
+const LANGUAGE_COLORS = {
+  JavaScript: "#f1e05a",
+  TypeScript: "#3178c6",
+  Python: "#3572a5",
+  HTML: "#e34c26",
+  CSS: "#563d7c",
+  Rust: "#dea584",
+  Go: "#00add8",
+  Java: "#b07219",
+  Ruby: "#701516",
+  PHP: "#4f5d95",
+  Swift: "#f05138",
+  Kotlin: "#a97bff",
+  Shell: "#89e051",
+  C: "#555555",
+  "C++": "#f34b7d",
+  "C#": "#178600"
+};
+
+const state = {
+  settings: { ...DEFAULT_SETTINGS },
+  auth: null,
+  repos: [],
+  searchResults: [],
+  deviceSession: null,
+  searchSequence: 0
+};
+
+const $ = (id) => document.getElementById(id);
+
+function storageGet(keys) {
+  if (!globalThis.chrome?.storage?.local) return Promise.resolve({});
+  return chrome.storage.local.get(keys);
+}
+
+function storageSet(value) {
+  if (!globalThis.chrome?.storage?.local) return Promise.resolve();
+  return chrome.storage.local.set(value);
+}
+
+function storageRemove(keys) {
+  if (!globalThis.chrome?.storage?.local) return Promise.resolve();
+  return chrome.storage.local.remove(keys);
+}
+
+function showNotice(element, message, kind = "info") {
+  if (!element) return;
+  element.textContent = message;
+  element.className = `notice${kind === "info" ? "" : ` ${kind}`}`;
+  element.hidden = !message;
+}
+
+function setBusy(button, busy, busyLabel) {
+  if (!button) return;
+  if (busy) {
+    button.dataset.label = button.textContent;
+    button.textContent = busyLabel;
+    button.disabled = true;
+  } else {
+    button.textContent = button.dataset.label || button.textContent;
+    button.disabled = false;
+    delete button.dataset.label;
+  }
+}
+
+function formatDate(value) {
+  if (!value) return "Never synced";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Never synced";
+  return `Synced ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)}`;
+}
+
+function escapeText(value) {
+  return String(value ?? "");
+}
+
+function normalizeAuth(raw) {
+  if (!raw || typeof raw !== "object" || !raw.accessToken) return null;
+  return {
+    accessToken: raw.accessToken,
+    tokenType: raw.tokenType || "bearer",
+    scope: raw.scope || "",
+    user: raw.user || null
+  };
+}
+
+async function loadState() {
+  const stored = await storageGet([SETTINGS_KEY, AUTH_KEY, "gitai_settings", "githubToken"]);
+  const legacy = stored.gitai_settings || {};
+  state.settings = {
+    ...DEFAULT_SETTINGS,
+    ...(stored[SETTINGS_KEY] || {}),
+    ...(!stored[SETTINGS_KEY] ? {
+      includePrivate: Boolean(legacy.includePrivate),
+      includeStarred: Boolean(legacy.includeStarred),
+      includeForks: legacy.includeForks !== false,
+      includeArchived: Boolean(legacy.includeArchived),
+      apiEnabled: Boolean(legacy.aiEnabled || legacy.apiEnabled),
+      apiEndpoint: legacy.aiEndpoint || legacy.apiEndpoint || "",
+      apiKey: legacy.aiApiKey || legacy.apiKey || "",
+      apiModel: legacy.aiModel || legacy.apiModel || DEFAULT_SETTINGS.apiModel,
+      theme: legacy.theme || DEFAULT_SETTINGS.theme
+    } : {})
+  };
+  state.auth = normalizeAuth(stored[AUTH_KEY]);
+
+  if (stored.githubToken || stored.gitai_settings) {
+    await storageRemove(["githubToken", "gitai_settings"]);
+  }
+
+  const cache = await GitHubService.getCache().catch(() => null);
+  state.repos = Array.isArray(cache?.repos) ? cache.repos : [];
+}
+
+function applyTheme(theme = state.settings.theme) {
+  const resolved = theme === "system"
+    ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    : theme;
+  document.documentElement.dataset.theme = resolved;
+  $("btn-theme").setAttribute("aria-label", `Switch to ${resolved === "dark" ? "light" : "dark"} theme`);
+}
+
+function setView(view) {
+  const settings = view === "settings";
+  $("search-view").hidden = settings;
+  $("settings-view").hidden = !settings;
+  if (settings) {
+    renderSettings();
+    $("settings-view").focus();
+  } else {
+    $("search-input").focus();
+  }
+}
+
+function renderSettings() {
+  const s = state.settings;
+  $("include-private").checked = s.includePrivate;
+  $("include-starred").checked = s.includeStarred;
+  $("include-forks").checked = s.includeForks;
+  $("include-archived").checked = s.includeArchived;
+  $("api-enabled").checked = s.apiEnabled;
+  $("api-endpoint").value = s.apiEndpoint;
+  $("api-key").value = s.apiKey;
+  $("api-model").value = s.apiModel;
+  setApiFieldsEnabled();
+  renderAuth();
+  $("version").textContent = `Version ${chrome?.runtime?.getManifest?.().version || "2.0.0"}`;
+}
+
+function authClientConfigured() {
+  return Boolean(globalThis.APP_CONFIG?.githubClientId && !String(APP_CONFIG.githubClientId).includes("YOUR_GITHUB_CLIENT_ID"));
+}
+
+function renderAuth() {
+  const connected = Boolean(state.auth?.accessToken && state.auth?.user);
+  $("github-signed-out").hidden = connected || Boolean(state.deviceSession);
+  $("github-signed-in").hidden = !connected;
+  $("device-flow").hidden = !state.deviceSession;
+  $("github-status").textContent = connected ? "CONNECTED" : (state.deviceSession ? "PENDING" : "NOT CONNECTED");
+  $("github-status").classList.toggle("connected", connected);
+  $("btn-connect-github").disabled = !authClientConfigured();
+
+  const help = $("oauth-config-help");
+  if (help) {
+    help.textContent = authClientConfigured()
+      ? "You will approve a short code on github.com. The extension never receives your password."
+      : "Release setup required: add your public GitHub OAuth App Client ID to config.js.";
+  }
+
+  if (connected) {
+    const user = state.auth.user;
+    $("github-avatar").src = user.avatar_url || "";
+    $("github-avatar").alt = user.login ? `${user.login} avatar` : "GitHub avatar";
+    $("github-name").textContent = user.name || user.login || "GitHub user";
+    $("github-profile").textContent = `@${user.login || "github"}`;
+    $("github-profile").href = user.html_url || "https://github.com";
+  }
+
+  const lastSync = state.repos.length ? Math.max(...state.repos.map((repo) => Date.parse(repo.cached_at || repo.updated_at || 0))) : 0;
+  $("last-sync").textContent = formatDate(lastSync || null);
+}
+
+function setApiFieldsEnabled() {
+  const enabled = $("api-enabled").checked;
+  $("api-fields").classList.toggle("disabled", !enabled);
+  for (const field of $("api-fields").querySelectorAll("input, button")) field.disabled = !enabled;
+}
+
+function collectSettings() {
+  return {
+    ...state.settings,
+    includePrivate: $("include-private").checked,
+    includeStarred: $("include-starred").checked,
+    includeForks: $("include-forks").checked,
+    includeArchived: $("include-archived").checked,
+    apiEnabled: $("api-enabled").checked,
+    apiEndpoint: $("api-endpoint").value.trim(),
+    apiKey: $("api-key").value.trim(),
+    apiModel: $("api-model").value.trim() || DEFAULT_SETTINGS.apiModel
+  };
+}
+
+async function saveSettings() {
+  const previousPrivate = state.settings.includePrivate;
+  state.settings = collectSettings();
+  if (state.settings.apiEnabled && !state.settings.apiEndpoint) {
+    showNotice($("settings-notice"), "Add an OpenAI-compatible endpoint or turn off enhanced search.", "error");
+    $("api-endpoint").focus();
+    return;
+  }
+
+  if (state.settings.includePrivate && !previousPrivate && state.auth && !String(state.auth.scope).split(/[ ,]+/).includes("repo")) {
+    showNotice($("settings-notice"), "Reconnect GitHub to grant private repository access.", "warning");
+  } else {
+    showNotice($("settings-notice"), "Settings saved.");
+  }
+  await storageSet({ [SETTINGS_KEY]: state.settings });
+  updateModeUi();
+}
+
+function updateModeUi() {
+  const configured = Boolean(state.settings.apiEnabled && state.settings.apiEndpoint);
+  $("enhanced-toggle-wrap").hidden = !configured;
+  if (!configured) $("enhanced-search").checked = false;
+  $("search-mode-badge").textContent = $("enhanced-search").checked ? "ENHANCED" : "LOCAL";
+  $("search-mode-badge").classList.toggle("enhanced", $("enhanced-search").checked);
+  $("repo-count").textContent = `${state.repos.length} ${state.repos.length === 1 ? "repo" : "repos"}`;
+}
+
+function populateLanguages() {
+  const select = $("language-filter");
+  const current = select.value;
+  const languages = [...new Set(state.repos.map((repo) => repo.language).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  select.replaceChildren(new Option("All languages", "all"), ...languages.map((language) => new Option(language, language)));
+  select.value = languages.includes(current) ? current : "all";
+}
+
+function renderHomeState() {
+  const hasRepos = state.repos.length > 0;
+  $("welcome-copy").textContent = hasRepos
+    ? `${state.repos.length} repositories are ready. Search above or sync to refresh your index.`
+    : (state.auth ? "Your GitHub account is connected. Sync repositories to build the local index." : "Connect GitHub in settings, then sync your repositories.");
+  $("btn-welcome-action").textContent = state.auth ? (hasRepos ? "Refresh index" : "Sync repositories") : "Connect GitHub";
+}
+
+function repoMatchesLanguage(repo) {
+  const language = $("language-filter").value;
+  return language === "all" || repo.language === language;
+}
+
+function showSearchPanel(panel) {
+  $("loading-state").hidden = panel !== "loading";
+  $("welcome-state").hidden = panel !== "welcome";
+  $("empty-results").hidden = panel !== "empty";
+  $("results-section").hidden = panel !== "results";
+}
+
+function renderResults(results, query) {
+  const filtered = results.filter(repoMatchesLanguage);
+  state.searchResults = filtered;
+  $("repo-list").replaceChildren(...filtered.map(createRepoCard));
+  $("result-count").textContent = `${filtered.length} ${filtered.length === 1 ? "result" : "results"}`;
+  if (filtered.length) showSearchPanel("results");
+  else if (query) showSearchPanel("empty");
+  else showSearchPanel("welcome");
+}
+
+function createRepoCard(repo) {
+  const article = document.createElement("article");
+  article.className = `repo-card${repo.archived ? " archived" : ""}`;
+
+  const title = document.createElement("div");
+  title.className = "repo-card-title";
+  const link = document.createElement("a");
+  link.href = repo.html_url || repo.url || `https://github.com/${repo.full_name || repo.name}`;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = escapeText(repo.full_name || repo.name || "Untitled repository");
+  title.append(link);
+  article.append(title);
+
+  if (Number.isFinite(Number(repo.relevance_score))) {
+    const score = document.createElement("span");
+    score.className = "repo-score";
+    score.textContent = `${Math.round(Number(repo.relevance_score))}%`;
+    score.title = "Search relevance";
+    article.append(score);
+  }
+
+  const description = document.createElement("p");
+  description.className = "repo-card-description";
+  description.textContent = escapeText(repo.description || "No description provided.");
+  article.append(description);
+
+  const meta = document.createElement("div");
+  meta.className = "repo-meta";
+  if (repo.language) {
+    const language = document.createElement("span");
+    language.className = "language";
+    language.style.setProperty("--language-color", LANGUAGE_COLORS[repo.language] || "#8b949e");
+    language.textContent = repo.language;
+    meta.append(language);
+  }
+  const stars = document.createElement("span");
+  stars.textContent = `★ ${Number(repo.stargazers_count || repo.stars || 0).toLocaleString()}`;
+  meta.append(stars);
+  const updated = document.createElement("span");
+  updated.textContent = repo.updated_at ? `Updated ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(repo.updated_at))}` : "Update unknown";
+  meta.append(updated);
+  if (repo.private) {
+    const badge = document.createElement("span");
+    badge.textContent = "Private";
+    meta.append(badge);
+  }
+  if (repo.fork) {
+    const badge = document.createElement("span");
+    badge.textContent = "Fork";
+    meta.append(badge);
+  }
+  article.append(meta);
+
+  const topics = (repo.topics || []).slice(0, 5);
+  if (topics.length) {
+    const list = document.createElement("div");
+    list.className = "topic-list";
+    for (const topic of topics) {
+      const item = document.createElement("span");
+      item.textContent = topic;
+      list.append(item);
+    }
+    article.append(list);
+  }
+  return article;
+}
+
+async function runSearch() {
+  const query = $("search-input").value.trim();
+  $("btn-clear").hidden = !query;
+  showNotice($("notice"), "");
+
+  if (!query) {
+    renderResults([], "");
+    return;
+  }
+  if (!state.repos.length) {
+    showNotice($("notice"), "Connect GitHub and sync repositories before searching.", "warning");
+    showSearchPanel("welcome");
+    return;
+  }
+
+  const sequence = ++state.searchSequence;
+  showSearchPanel("loading");
+  $("btn-search").disabled = true;
+  try {
+    const enhanced = $("enhanced-search").checked;
+    const config = enhanced ? {
+      endpoint: state.settings.apiEndpoint,
+      apiKey: state.settings.apiKey,
+      model: state.settings.apiModel
+    } : null;
+    const results = await AIService.searchRepositories(query, state.repos, config);
+    if (sequence !== state.searchSequence) return;
+    renderResults(Array.isArray(results) ? results : [], query);
+    if (enhanced && AIService.lastSearchUsedFallback) {
+      showNotice($("notice"), "The custom API was unavailable, so results use private local matching.", "warning");
+    }
+  } catch (error) {
+    if (sequence !== state.searchSequence) return;
+    showNotice($("notice"), error.message || "Search failed.", "error");
+    showSearchPanel("empty");
+  } finally {
+    if (sequence === state.searchSequence) $("btn-search").disabled = false;
+  }
+}
+
+function requiredOrigin(endpoint) {
+  try {
+    const url = new URL(endpoint);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error();
+    return `${url.origin}/*`;
+  } catch {
+    throw new Error("Enter a valid HTTP or HTTPS endpoint.");
+  }
+}
+
+async function ensureEndpointPermission(endpoint) {
+  const origin = requiredOrigin(endpoint);
+  if (!chrome?.permissions) return true;
+  if (await chrome.permissions.contains({ origins: [origin] })) return true;
+  return chrome.permissions.request({ origins: [origin] });
+}
+
+async function testApi() {
+  const endpoint = $("api-endpoint").value.trim();
+  const resultNode = $("api-test-result");
+  resultNode.textContent = "";
+  resultNode.className = "inline-status";
+  try {
+    if (!(await ensureEndpointPermission(endpoint))) throw new Error("Endpoint access was not granted.");
+    setBusy($("btn-test-api"), true, "Testing…");
+    const result = await AIService.testConnection(endpoint, $("api-key").value.trim(), $("api-model").value.trim());
+    resultNode.textContent = result.message || (result.success ? "Connection works." : "Connection failed.");
+    resultNode.classList.add(result.success ? "success" : "error");
+  } catch (error) {
+    resultNode.textContent = error.message || "Connection failed.";
+    resultNode.classList.add("error");
+  } finally {
+    setBusy($("btn-test-api"), false);
+  }
+}
+
+async function beginGitHubConnection() {
+  if (!authClientConfigured()) {
+    showNotice($("settings-notice"), "Add the public GitHub OAuth Client ID to config.js before connecting.", "error");
+    return;
+  }
+  setBusy($("btn-connect-github"), true, "Starting…");
+  showNotice($("settings-notice"), "");
+  try {
+    const scopes = state.settings.includePrivate ? ["read:user", "repo"] : ["read:user"];
+    const session = await GitHubAuth.startDeviceFlow(scopes);
+    state.deviceSession = session;
+    $("device-code").textContent = session.userCode || session.user_code;
+    $("verification-link").href = session.verificationUri || session.verification_uri || "https://github.com/login/device";
+    $("device-expiry").textContent = `Code expires in about ${Math.max(1, Math.round((session.expiresIn || session.expires_in || 900) / 60))} minutes.`;
+    renderAuth();
+    window.open($("verification-link").href, "_blank", "noopener");
+  } catch (error) {
+    showNotice($("settings-notice"), error.message || "Could not start GitHub authorization.", "error");
+  } finally {
+    setBusy($("btn-connect-github"), false);
+  }
+}
+
+async function finishGitHubConnection() {
+  if (!state.deviceSession) return;
+  setBusy($("btn-check-authorization"), true, "Checking…");
+  try {
+    const token = await GitHubAuth.pollForToken(state.deviceSession, { singleAttempt: true });
+    if (!token) {
+      showNotice($("settings-notice"), "GitHub is still waiting for approval. Complete the code step, then check again.", "warning");
+      return;
+    }
+    const accessToken = token.accessToken || token.access_token;
+    const user = token.user || await GitHubAuth.getUser(accessToken);
+    state.auth = {
+      accessToken,
+      tokenType: token.tokenType || token.token_type || "bearer",
+      scope: token.scope || "",
+      user
+    };
+    await storageSet({ [AUTH_KEY]: state.auth });
+    state.deviceSession = null;
+    renderAuth();
+    showNotice($("settings-notice"), `Connected as @${user.login}.`);
+    await syncRepositories();
+  } catch (error) {
+    const pending = /pending|waiting|not yet/i.test(error.message || "");
+    showNotice($("settings-notice"), pending ? "GitHub is still waiting for approval." : (error.message || "Authorization failed."), pending ? "warning" : "error");
+  } finally {
+    setBusy($("btn-check-authorization"), false);
+  }
+}
+
+async function disconnectGitHub() {
+  if (!confirm("Disconnect GitHub and remove the OAuth token from this device?")) return;
+  await GitHubAuth.disconnect?.().catch(() => {});
+  await storageRemove([AUTH_KEY]);
+  state.auth = null;
+  state.deviceSession = null;
+  renderAuth();
+  showNotice($("settings-notice"), "GitHub disconnected. Cached repositories remain until you clear them.");
+}
+
+async function syncRepositories() {
+  if (!state.auth?.accessToken) {
+    setView("settings");
+    showNotice($("settings-notice"), "Connect GitHub before syncing.", "warning");
+    return;
+  }
+  setBusy($("btn-sync"), true, "Syncing…");
+  showNotice($("settings-notice"), "Syncing repositories…");
+  try {
+    const repos = await GitHubService.fetchAllRepositories(state.auth.accessToken, state.settings);
+    state.repos = Array.isArray(repos) ? repos : [];
+    await GitHubService.saveCache(state.repos);
+    populateLanguages();
+    updateModeUi();
+    renderHomeState();
+    renderAuth();
+    showNotice($("settings-notice"), `Synced ${state.repos.length} repositories.`);
+  } catch (error) {
+    showNotice($("settings-notice"), error.message || "Repository sync failed.", "error");
+  } finally {
+    setBusy($("btn-sync"), false);
+  }
+}
+
+async function clearCache() {
+  if (!confirm("Remove cached repository metadata from this device?")) return;
+  await GitHubService.clearCache();
+  state.repos = [];
+  state.searchResults = [];
+  populateLanguages();
+  updateModeUi();
+  renderHomeState();
+  renderResults([], "");
+  showNotice($("settings-notice"), "Repository cache cleared.");
+}
+
+function bindEvents() {
+  $("btn-settings").addEventListener("click", () => setView("settings"));
+  $("btn-close-settings").addEventListener("click", () => setView("search"));
+  $("btn-home").addEventListener("click", () => setView("search"));
+  $("btn-theme").addEventListener("click", async () => {
+    const current = document.documentElement.dataset.theme;
+    state.settings.theme = current === "dark" ? "light" : "dark";
+    applyTheme(state.settings.theme);
+    await storageSet({ [SETTINGS_KEY]: state.settings });
+  });
+  $("btn-open-sidepanel").addEventListener("click", async () => {
+    try {
+      if (!chrome?.sidePanel) return;
+      const win = await chrome.windows.getCurrent();
+      await chrome.sidePanel.open({ windowId: win.id });
+      window.close();
+    } catch (error) {
+      showNotice($("notice"), error.message || "Could not open the side panel.", "error");
+    }
+  });
+  $("search-form").addEventListener("submit", (event) => { event.preventDefault(); runSearch(); });
+  $("search-input").addEventListener("input", () => { $("btn-clear").hidden = !$("search-input").value; });
+  $("btn-clear").addEventListener("click", () => { $("search-input").value = ""; $("btn-clear").hidden = true; renderResults([], ""); $("search-input").focus(); });
+  $("language-filter").addEventListener("change", () => renderResults(state.searchResults.length ? state.searchResults : state.repos, $("search-input").value.trim()));
+  $("enhanced-search").addEventListener("change", updateModeUi);
+  for (const button of document.querySelectorAll("[data-prompt]")) {
+    button.addEventListener("click", () => { $("search-input").value = button.dataset.prompt; runSearch(); });
+  }
+  $("btn-welcome-action").addEventListener("click", () => state.auth ? syncRepositories() : setView("settings"));
+  $("api-enabled").addEventListener("change", setApiFieldsEnabled);
+  $("btn-toggle-key").addEventListener("click", () => {
+    const hidden = $("api-key").type === "password";
+    $("api-key").type = hidden ? "text" : "password";
+    $("btn-toggle-key").textContent = hidden ? "Hide" : "Show";
+    $("btn-toggle-key").setAttribute("aria-label", `${hidden ? "Hide" : "Show"} API key`);
+  });
+  $("btn-test-api").addEventListener("click", testApi);
+  $("btn-save-settings").addEventListener("click", saveSettings);
+  $("btn-connect-github").addEventListener("click", beginGitHubConnection);
+  $("btn-check-authorization").addEventListener("click", finishGitHubConnection);
+  $("btn-cancel-authorization").addEventListener("click", () => { GitHubAuth.cancel?.(); state.deviceSession = null; renderAuth(); });
+  $("btn-copy-code").addEventListener("click", async () => { await navigator.clipboard.writeText($("device-code").textContent); $("btn-copy-code").textContent = "Copied"; setTimeout(() => { $("btn-copy-code").textContent = "Copy"; }, 1200); });
+  $("btn-sync").addEventListener("click", syncRepositories);
+  $("btn-disconnect").addEventListener("click", disconnectGitHub);
+  $("btn-clear-cache").addEventListener("click", clearCache);
+}
+
+async function initialize() {
+  try {
+    await loadState();
+    bindEvents();
+    applyTheme();
+    renderSettings();
+    populateLanguages();
+    updateModeUi();
+    renderHomeState();
+    renderResults([], "");
+  } catch (error) {
+    console.error("Initialization failed", error);
+    showNotice($("notice"), error.message || "The extension could not start.", "error");
+  }
+}
+
+if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", initialize);
+
+if (typeof module !== "undefined") {
+  module.exports = { DEFAULT_SETTINGS, normalizeAuth, requiredOrigin, formatDate, createRepoCard };
+}

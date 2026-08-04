@@ -1,30 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "GitHub AI Repo Finder",
-  "version": "1.7.0",
-  "description": "Natural language AI search for your GitHub repositories with custom AI endpoint integration.",
+  "name": "GitHub Repo Finder",
+  "version": "2.0.0",
+  "description": "Search your GitHub repositories locally or with an OpenAI-compatible API you provide.",
   "permissions": [
     "storage",
     "sidePanel"
   ],
-  "side_panel": {
-    "default_path": "popup.html"
-  },
   "host_permissions": [
     "https://api.github.com/*",
-    "*://*/*"
+    "https://github.com/login/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
+    "default_title": "GitHub Repo Finder",
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 }
