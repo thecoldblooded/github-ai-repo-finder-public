@@ -60,8 +60,7 @@ const GitHubService = {
 
   async fetchAllRepositories(token, settings = {}) {
     if (!token) throw new Error("Connect GitHub before syncing repositories.");
-    const ownedType = settings.includePrivate ? "all" : "public";
-    const owned = await this.fetchPaginated(`/user/repos?sort=updated&direction=desc&type=${ownedType}&visibility=${settings.includePrivate ? "all" : "public"}`, token);
+    const owned = await this.fetchPaginated(`/user/repos?sort=updated&direction=desc&visibility=${settings.includePrivate ? "all" : "public"}`, token);
     let combined = owned;
     if (settings.includeStarred) {
       const starred = await this.fetchPaginated("/user/starred?sort=updated&direction=desc", token);

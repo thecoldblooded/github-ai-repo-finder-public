@@ -101,6 +101,8 @@ async function response(data, ok = true, status = 200) {
     assert.equal(new Set(repos.map((repo) => repo.id)).size, repos.length);
     assert.equal(repos.some((repo) => repo.private || repo.fork || repo.archived), false);
     assert.ok(urls.some((url) => url.includes("page=2")));
+    assert.ok(urls.some((url) => url.includes("visibility=public")));
+    assert.equal(urls.some((url) => url.includes("type=")), false);
   });
 
   await test("GitHub authorization and rate-limit errors are actionable", async () => {
