@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "GitHub Repo Finder",
+  "name": "AI Repo Finder for GitHub",
   "version": "2.0.0",
   "description": "Search your GitHub repositories locally or with an OpenAI-compatible API you provide.",
   "permissions": [
@@ -12,11 +12,12 @@
     "https://github.com/login/*"
   ],
   "optional_host_permissions": [
-    "http://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
     "https://*/*"
   ],
   "action": {
-    "default_title": "GitHub Repo Finder",
+    "default_title": "AI Repo Finder for GitHub",
     "default_popup": "popup.html"
   },
   "side_panel": {

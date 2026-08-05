@@ -2,6 +2,7 @@
 
 const SETTINGS_KEY = "repo_finder_settings";
 const AUTH_KEY = "repo_finder_auth";
+const DEVICE_SESSION_KEY = "repo_finder_device_session";
 const DEFAULT_SETTINGS = Object.freeze({
   theme: "system",
   includePrivate: false,
@@ -37,10 +38,14 @@ const state = {
   settings: { ...DEFAULT_SETTINGS },
   auth: null,
   repos: [],
+  rawSearchResults: [],
   searchResults: [],
   deviceSession: null,
+  lastSync: null,
   searchSequence: 0
 };
+
+let systemThemeMedia;
 
 const $ = (id) => document.getElementById(id);
 
@@ -101,7 +106,7 @@ function normalizeAuth(raw) {
 }
 
 async function loadState() {
-  const stored = await storageGet([SETTINGS_KEY, AUTH_KEY, "gitai_settings", "githubToken"]);
+  const stored = await storageGet([SETTINGS_KEY, AUTH_KEY, DEVICE_SESSION_KEY, "gitai_settings", "githubToken"]);
   const legacy = stored.gitai_settings || {};
   state.settings = {
     ...DEFAULT_SETTINGS,
@@ -119,6 +124,12 @@ async function loadState() {
     } : {})
   };
   state.auth = normalizeAuth(stored[AUTH_KEY]);
+  const pendingSession = stored[DEVICE_SESSION_KEY];
+  if (pendingSession?.deviceCode && Number(pendingSession.expiresAt) > Date.now()) {
+    state.deviceSession = pendingSession;
+  } else if (pendingSession) {
+    await storageRemove(DEVICE_SESSION_KEY);
+  }
 
   if (stored.githubToken || stored.gitai_settings) {
     await storageRemove(["githubToken", "gitai_settings"]);
@@ -126,11 +137,13 @@ async function loadState() {
 
   const cache = await GitHubService.getCache().catch(() => null);
   state.repos = Array.isArray(cache?.repos) ? cache.repos : [];
+  state.lastSync = cache?.timestamp || null;
 }
 
 function applyTheme(theme = state.settings.theme) {
+  systemThemeMedia ||= matchMedia("(prefers-color-scheme: dark)");
   const resolved = theme === "system"
-    ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    ? (systemThemeMedia.matches ? "dark" : "light")
     : theme;
   document.documentElement.dataset.theme = resolved;
   $("btn-theme").setAttribute("aria-label", `Switch to ${resolved === "dark" ? "light" : "dark"} theme`);
@@ -192,8 +205,7 @@ function renderAuth() {
     $("github-profile").href = user.html_url || "https://github.com";
   }
 
-  const lastSync = state.repos.length ? Math.max(...state.repos.map((repo) => Date.parse(repo.cached_at || repo.updated_at || 0))) : 0;
-  $("last-sync").textContent = formatDate(lastSync || null);
+  $("last-sync").textContent = formatDate(state.lastSync);
 }
 
 function setApiFieldsEnabled() {
@@ -217,20 +229,32 @@ function collectSettings() {
 }
 
 async function saveSettings() {
-  const previousPrivate = state.settings.includePrivate;
-  state.settings = collectSettings();
-  if (state.settings.apiEnabled && !state.settings.apiEndpoint) {
+  const previous = state.settings;
+  const next = collectSettings();
+  const needsPrivateReconnect = next.includePrivate && state.auth && !String(state.auth.scope).split(/[ ,]+/).includes("repo");
+  if (next.apiEnabled && !next.apiEndpoint) {
     showNotice($("settings-notice"), "Add an OpenAI-compatible endpoint or turn off enhanced search.", "error");
     $("api-endpoint").focus();
     return;
   }
-
-  if (state.settings.includePrivate && !previousPrivate && state.auth && !String(state.auth.scope).split(/[ ,]+/).includes("repo")) {
-    showNotice($("settings-notice"), "Reconnect GitHub to grant private repository access.", "warning");
-  } else {
-    showNotice($("settings-notice"), "Settings saved.");
+  try {
+    if (next.apiEndpoint) next.apiEndpoint = validateEndpoint(next.apiEndpoint);
+    if (next.apiEnabled && !(await ensureEndpointPermission(next.apiEndpoint))) throw new Error("Endpoint access was not granted.");
+  } catch (error) {
+    showNotice($("settings-notice"), error.message || "Enter a valid API endpoint.", "error");
+    return;
   }
-  await storageSet({ [SETTINGS_KEY]: state.settings });
+
+  state.settings = next;
+  await storageSet({ [SETTINGS_KEY]: next });
+  if (previous.apiEndpoint && (!next.apiEnabled || requiredOrigin(previous.apiEndpoint) !== requiredOrigin(next.apiEndpoint))) {
+    await globalThis.chrome?.permissions?.remove({ origins: [requiredOrigin(previous.apiEndpoint)] }).catch(() => false);
+  }
+  showNotice(
+    $("settings-notice"),
+    needsPrivateReconnect ? "Settings saved. Reconnect GitHub to grant private repository access." : "Settings saved.",
+    needsPrivateReconnect ? "warning" : "info"
+  );
   updateModeUi();
 }
 
@@ -272,6 +296,7 @@ function showSearchPanel(panel) {
 }
 
 function renderResults(results, query) {
+  state.rawSearchResults = results;
   const filtered = results.filter(repoMatchesLanguage);
   state.searchResults = filtered;
   $("repo-list").replaceChildren(...filtered.map(createRepoCard));
@@ -399,9 +424,18 @@ function requiredOrigin(endpoint) {
   }
 }
 
+function validateEndpoint(endpoint) {
+  const normalized = AIService.normalizeEndpoint(endpoint);
+  const url = new URL(normalized);
+  if (url.protocol === "http:" && !["localhost", "127.0.0.1"].includes(url.hostname)) {
+    throw new Error("Remote API endpoints must use HTTPS. Plain HTTP is limited to localhost.");
+  }
+  return normalized;
+}
+
 async function ensureEndpointPermission(endpoint) {
   const origin = requiredOrigin(endpoint);
-  if (!chrome?.permissions) return true;
+  if (!globalThis.chrome?.permissions) return true;
   if (await chrome.permissions.contains({ origins: [origin] })) return true;
   return chrome.permissions.request({ origins: [origin] });
 }
@@ -412,6 +446,7 @@ async function testApi() {
   resultNode.textContent = "";
   resultNode.className = "inline-status";
   try {
+    validateEndpoint(endpoint);
     if (!(await ensureEndpointPermission(endpoint))) throw new Error("Endpoint access was not granted.");
     setBusy($("btn-test-api"), true, "Testing…");
     const result = await AIService.testConnection(endpoint, $("api-key").value.trim(), $("api-model").value.trim());
@@ -436,6 +471,7 @@ async function beginGitHubConnection() {
     const scopes = state.settings.includePrivate ? ["read:user", "repo"] : ["read:user"];
     const session = await GitHubAuth.startDeviceFlow(scopes);
     state.deviceSession = session;
+    await storageSet({ [DEVICE_SESSION_KEY]: session });
     $("device-code").textContent = session.userCode || session.user_code;
     $("verification-link").href = session.verificationUri || session.verification_uri || "https://github.com/login/device";
     $("device-expiry").textContent = `Code expires in about ${Math.max(1, Math.round((session.expiresIn || session.expires_in || 900) / 60))} minutes.`;
@@ -467,6 +503,7 @@ async function finishGitHubConnection() {
     };
     await storageSet({ [AUTH_KEY]: state.auth });
     state.deviceSession = null;
+    await storageRemove(DEVICE_SESSION_KEY);
     renderAuth();
     showNotice($("settings-notice"), `Connected as @${user.login}.`);
     await syncRepositories();
@@ -481,7 +518,7 @@ async function finishGitHubConnection() {
 async function disconnectGitHub() {
   if (!confirm("Disconnect GitHub and remove the OAuth token from this device?")) return;
   await GitHubAuth.disconnect?.().catch(() => {});
-  await storageRemove([AUTH_KEY]);
+  await storageRemove([AUTH_KEY, DEVICE_SESSION_KEY]);
   state.auth = null;
   state.deviceSession = null;
   renderAuth();
@@ -499,7 +536,7 @@ async function syncRepositories() {
   try {
     const repos = await GitHubService.fetchAllRepositories(state.auth.accessToken, state.settings);
     state.repos = Array.isArray(repos) ? repos : [];
-    await GitHubService.saveCache(state.repos);
+    state.lastSync = (await GitHubService.getCache())?.timestamp || new Date().toISOString();
     populateLanguages();
     updateModeUi();
     renderHomeState();
@@ -547,7 +584,10 @@ function bindEvents() {
   $("search-form").addEventListener("submit", (event) => { event.preventDefault(); runSearch(); });
   $("search-input").addEventListener("input", () => { $("btn-clear").hidden = !$("search-input").value; });
   $("btn-clear").addEventListener("click", () => { $("search-input").value = ""; $("btn-clear").hidden = true; renderResults([], ""); $("search-input").focus(); });
-  $("language-filter").addEventListener("change", () => renderResults(state.searchResults.length ? state.searchResults : state.repos, $("search-input").value.trim()));
+  $("language-filter").addEventListener("change", () => {
+    const query = $("search-input").value.trim();
+    renderResults(query ? state.rawSearchResults : state.repos, query);
+  });
   $("enhanced-search").addEventListener("change", updateModeUi);
   for (const button of document.querySelectorAll("[data-prompt]")) {
     button.addEventListener("click", () => { $("search-input").value = button.dataset.prompt; runSearch(); });
@@ -564,7 +604,12 @@ function bindEvents() {
   $("btn-save-settings").addEventListener("click", saveSettings);
   $("btn-connect-github").addEventListener("click", beginGitHubConnection);
   $("btn-check-authorization").addEventListener("click", finishGitHubConnection);
-  $("btn-cancel-authorization").addEventListener("click", () => { GitHubAuth.cancel?.(); state.deviceSession = null; renderAuth(); });
+  $("btn-cancel-authorization").addEventListener("click", async () => {
+    GitHubAuth.cancel?.();
+    state.deviceSession = null;
+    await storageRemove(DEVICE_SESSION_KEY);
+    renderAuth();
+  });
   $("btn-copy-code").addEventListener("click", async () => { await navigator.clipboard.writeText($("device-code").textContent); $("btn-copy-code").textContent = "Copied"; setTimeout(() => { $("btn-copy-code").textContent = "Copy"; }, 1200); });
   $("btn-sync").addEventListener("click", syncRepositories);
   $("btn-disconnect").addEventListener("click", disconnectGitHub);

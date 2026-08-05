@@ -1,325 +1,183 @@
-/**
- * ai-service.js
- * Handles Natural Language AI Search using custom OpenAI-compatible endpoints or Gemini API,
- * with a smart built-in fallback fuzzy/keyword matcher.
- */
+"use strict";
 
 const AIService = {
-  /**
-   * Automatically normalizes base URLs (e.g. "http://localhost:20128/v1") to full endpoint "/v1/chat/completions"
-   */
+  lastSearchUsedFallback: false,
+
   normalizeEndpoint(rawEndpoint) {
     if (!rawEndpoint) return "";
-    let url = rawEndpoint.trim();
-    if (url.endsWith("/")) {
-      url = url.slice(0, -1);
-    }
-    if (url.endsWith("/v1")) {
-      return `${url}/chat/completions`;
-    }
-    if (!url.includes("/chat/completions") && !url.includes("/completions") && !url.includes("/generate")) {
-      return `${url}/v1/chat/completions`;
-    }
-    return url;
+    const parsed = new URL(rawEndpoint.trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("The API endpoint must use HTTP or HTTPS.");
+    let path = parsed.pathname.replace(/\/+$/, "");
+    if (!path || path === "/") path = "/v1/chat/completions";
+    else if (path.endsWith("/v1")) path += "/chat/completions";
+    else if (!path.endsWith("/chat/completions")) path += "/v1/chat/completions";
+    parsed.pathname = path.replace(/\/+/g, "/");
+    parsed.hash = "";
+    return parsed.toString();
   },
 
-  /**
-   * Test custom AI API Connection
-   * @param {string} endpoint 
-   * @param {string} apiKey 
-   * @param {string} model 
-   * @returns {Promise<{success: boolean, message: string}>}
-   */
-  async testConnection(endpoint, apiKey, model) {
-    if (!endpoint) {
-      return { success: false, message: "API Endpoint URL girilmedi." };
-    }
-
-    const targetUrl = this.normalizeEndpoint(endpoint);
+  headers(apiKey) {
     const headers = { "Content-Type": "application/json" };
-    if (apiKey && apiKey.trim()) {
-      headers["Authorization"] = `Bearer ${apiKey.trim()}`;
-    }
+    if (apiKey?.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
+    return headers;
+  },
 
+  async readError(response) {
+    const data = await response.json().catch(() => ({}));
+    return data?.error?.message || data?.message || `${response.status} ${response.statusText || "request failed"}`;
+  },
+
+  async testConnection(endpoint, apiKey, model) {
+    if (!endpoint) return { success: false, message: "Enter an API endpoint." };
     try {
-      const response = await fetch(targetUrl, {
+      const response = await fetch(this.normalizeEndpoint(endpoint), {
         method: "POST",
-        headers: headers,
+        headers: this.headers(apiKey),
         body: JSON.stringify({
-          model: model || "gpt-3.5-turbo",
-          messages: [
-            { role: "system", content: "Test ping" },
-            { role: "user", content: "Hello" }
-          ],
-          max_tokens: 5
+          model: model || "gpt-4o-mini",
+          messages: [{ role: "user", content: "Reply with OK." }],
+          temperature: 0,
+          max_tokens: 8
         })
       });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        return { 
-          success: false, 
-          message: `YZ Endpoint Hatası (${response.status}): ${errText.substring(0, 100) || response.statusText}` 
-        };
-      }
-
-      return { success: true, message: "YZ Sunucu Bağlantısı Başarılı!" };
-    } catch (err) {
-      console.error("AI connection test failed:", err);
-      return { success: false, message: `Bağlantı hatası: ${err.message}` };
+      if (!response.ok) return { success: false, message: `Connection failed: ${await this.readError(response)}` };
+      const data = await response.json().catch(() => null);
+      if (!data?.choices?.[0]?.message?.content) return { success: false, message: "The endpoint did not return an OpenAI-compatible response." };
+      return { success: true, message: "Connection works." };
+    } catch (error) {
+      return { success: false, message: error.message || "Connection failed." };
     }
   },
 
-  /**
-   * Perform Natural Language Search over repositories list
-   * @param {string} query User query (e.g. "React ile yazdığım scraper projesi")
-   * @param {Array} repos List of cached repos
-   * @param {object} aiConfig { endpoint, apiKey, model }
-   * @returns {Promise<{reasoning: string, matchedRepos: Array}>}
-   */
-  async searchRepositories(query, repos, aiConfig) {
-    if (!repos || repos.length === 0) {
-      return { reasoning: "Arama yapılacak kayıtlı repo bulunamadı.", matchedRepos: [] };
-    }
-
-    const { endpoint, apiKey, model } = aiConfig || {};
-
-    // If endpoint is provided and active, try AI API call
-    if (endpoint && endpoint.trim()) {
+  async searchRepositories(query, repos, config) {
+    this.lastSearchUsedFallback = false;
+    if (!query?.trim()) return [];
+    if (!Array.isArray(repos)) return [];
+    if (config?.endpoint) {
       try {
-        return await this.callAIEndpoint(query, repos, endpoint.trim(), apiKey ? apiKey.trim() : "", model ? model.trim() : "");
-      } catch (err) {
-        console.warn("AI Search call failed, falling back to smart client matcher:", err);
+        return await this.callAIEndpoint(query, repos, config.endpoint, config.apiKey, config.model);
+      } catch (error) {
+        console.warn("Enhanced search failed; using local search:", error.message);
+        this.lastSearchUsedFallback = true;
       }
     }
-
-    // Fallback: Smart Client-Side Keyword & Multi-field Matcher
-    return this.smartFallbackSearch(query, repos);
+    return this.localSearch(query, repos);
   },
 
-  /**
-   * Select top candidate repos across the ENTIRE dataset (723+ repos) for AI analysis
-   */
-  selectBestCandidates(query, repos, maxCount = 250) {
-    if (!repos || repos.length <= maxCount) {
-      return repos;
-    }
-
-    const q = query.toLowerCase().trim();
-    const tokens = q.split(/\s+/).filter(t => t.length > 1);
-
-    const scored = repos.map(repo => {
-      let score = 0;
-      const nameLower = repo.name.toLowerCase();
-      const descLower = (repo.description || "").toLowerCase();
-      const langLower = (repo.language || "").toLowerCase();
-      const topicsStr = (repo.topics || []).join(" ").toLowerCase();
-
-      if (nameLower.includes(q)) score += 50;
-      if (descLower.includes(q)) score += 30;
-
-      tokens.forEach(token => {
-        if (nameLower.includes(token)) score += 20;
-        if (descLower.includes(token)) score += 15;
-        if (langLower.includes(token)) score += 20;
-        if (topicsStr.includes(token)) score += 20;
-      });
-
-      if (repo.updatedAt) {
-        const daysAgo = (new Date() - new Date(repo.updatedAt)) / (1000 * 3600 * 24);
-        if (daysAgo < 60) score += 5;
-      }
-
-      return { repo, score };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, maxCount).map(item => item.repo);
-  },
-
-  /**
-   * Call Custom OpenAI-compatible REST API Endpoint
-   */
-  async callAIEndpoint(query, repos, endpoint, apiKey, model) {
-    // Select top 250 candidates across ALL repos (e.g. 723+ repos) instead of slicing arbitrary first 100
-    const candidateRepos = this.selectBestCandidates(query, repos, 250);
-
-    const compactRepos = candidateRepos.map(r => ({
-      id: r.id,
-      name: r.name,
-      description: r.description,
-      language: r.language,
-      topics: r.topics,
-      stars: r.stargazersCount,
-      updatedAt: r.updatedAt
-    }));
-
-    const systemPrompt = `You are a GitHub Repository Search AI Assistant.
-The user will ask for a repository in natural language (Turkish or English).
-Analyze the provided repositories JSON and find the best matching repositories.
-
-IMPORTANT:
-1. For each matching repository, you MUST translate its original description into fluent, clear Turkish in the "trDescription" field.
-2. Return ALL relevant matching repositories (up to 30 matches), ordered by relevance score (0-100). Do not artificially restrict to only 2 or 3 results if more fit!
-
-Output format MUST be valid JSON strictly matching this structure:
-{
-  "reasoning": "Short summary in Turkish explaining why these repos were picked.",
-  "matches": [
-    {
-      "id": 123456,
-      "score": 95,
-      "reason": "Short reason in Turkish why this repo fits the query.",
-      "trDescription": "Fluent Turkish translation of the repo description."
-    }
-  ]
-}
-If no repos match, return empty matches array.`;
-
-    const userPrompt = `Sorgu: "${query}"
-
-Repolar:
-${JSON.stringify(compactRepos, null, 2)}`;
-
-    const headers = { "Content-Type": "application/json" };
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-    }
-
-    const payload = {
-      model: model || "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      temperature: 0.2
+  compactRepository(repo) {
+    return {
+      id: repo.id,
+      name: repo.name || "",
+      full_name: repo.full_name || repo.name || "",
+      description: repo.description || "",
+      language: repo.language || "",
+      topics: Array.isArray(repo.topics) ? repo.topics.slice(0, 12) : [],
+      updated_at: repo.updated_at || "",
+      archived: Boolean(repo.archived),
+      fork: Boolean(repo.fork)
     };
+  },
 
-    const targetUrl = this.normalizeEndpoint(endpoint);
-    const response = await fetch(targetUrl, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      throw new Error(`AI HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : "";
-
-    // Extract JSON from content
-    let parsedJson = null;
+  parseResponseContent(content) {
+    if (typeof content !== "string") throw new Error("The API returned an empty message.");
+    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = (fenced ? fenced[1] : content).trim();
     try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsedJson = JSON.parse(jsonMatch[0]);
-      }
-    } catch (e) {
-      console.error("Failed to parse AI JSON response:", content);
+      return JSON.parse(candidate);
+    } catch {
+      const start = Math.min(...[candidate.indexOf("{"), candidate.indexOf("[")].filter((index) => index >= 0));
+      const end = Math.max(candidate.lastIndexOf("}"), candidate.lastIndexOf("]"));
+      if (!Number.isFinite(start) || end <= start) throw new Error("The API response was not valid JSON.");
+      try { return JSON.parse(candidate.slice(start, end + 1)); }
+      catch { throw new Error("The API response was not valid JSON."); }
     }
-
-    if (!parsedJson || !Array.isArray(parsedJson.matches)) {
-      return this.smartFallbackSearch(query, repos);
-    }
-
-    // Map AI match results back to full repo objects
-    const repoMap = new Map(repos.map(r => [r.id, r]));
-    const matchedRepos = [];
-
-    parsedJson.matches.forEach(m => {
-      const repo = repoMap.get(m.id);
-      if (repo) {
-        matchedRepos.push({
-          ...repo,
-          aiScore: m.score || 80,
-          aiReason: m.reason || "",
-          trDescription: m.trDescription || ""
-        });
-      }
-    });
-
-    return {
-      reasoning: parsedJson.reasoning || `"${query}" sorgunuza en uygun ${matchedRepos.length} repo listelendi.`,
-      matchedRepos: matchedRepos
-    };
   },
 
-  /**
-   * Smart client-side fallback matcher using multi-field scoring & recency weights
-   */
-  smartFallbackSearch(query, repos) {
-    const q = query.toLowerCase().trim();
-    const tokens = q.split(/\s+/).filter(t => t.length > 1);
-
-    if (tokens.length === 0) {
-      return { reasoning: "Tüm kayıtlı depolar gösteriliyor.", matchedRepos: repos };
-    }
-
-    const scored = repos.map(repo => {
-      let score = 0;
-      const reasons = [];
-
-      const nameLower = repo.name.toLowerCase();
-      const descLower = repo.description.toLowerCase();
-      const langLower = repo.language.toLowerCase();
-      const topicsStr = (repo.topics || []).join(" ").toLowerCase();
-
-      // Exact name match
-      if (nameLower === q) {
-        score += 100;
-        reasons.push("Repo adı birebir eşleşti");
-      } else if (nameLower.includes(q)) {
-        score += 60;
-        reasons.push("Repo adı aranan ifadeyi içeriyor");
-      }
-
-      // Token matching
-      tokens.forEach(token => {
-        if (nameLower.includes(token)) {
-          score += 25;
-        }
-        if (descLower.includes(token)) {
-          score += 15;
-        }
-        if (langLower === token) {
-          score += 30;
-          reasons.push(`Programlama dili (${repo.language}) eşleşti`);
-        }
-        if (topicsStr.includes(token)) {
-          score += 20;
-          reasons.push(`Konu etiketi (${token}) eşleşti`);
-        }
-      });
-
-      // Special keywords like "güncel", "son", "yeni"
-      if (q.includes("son") || q.includes("güncel") || q.includes("yeni") || q.includes("recent")) {
-        const updateDate = new Date(repo.updatedAt);
-        const daysDiff = (new Date() - updateDate) / (1000 * 3600 * 24);
-        if (daysDiff < 30) {
-          score += 35;
-          reasons.push("Son 1 ay içinde güncellendi");
-        }
-      }
-
-      // Star count weight
-      if (repo.stargazersCount > 0) {
-        score += Math.min(repo.stargazersCount, 15);
-      }
-
-      return {
-        ...repo,
-        aiScore: Math.min(score, 100),
-        aiReason: reasons.length > 0 ? reasons.slice(0, 2).join(", ") : "İçerik ve etiket benzerliği"
-      };
+  async callAIEndpoint(query, repos, endpoint, apiKey, model) {
+    const compact = repos.slice(0, 1000).map((repo) => this.compactRepository(repo));
+    const response = await fetch(this.normalizeEndpoint(endpoint), {
+      method: "POST",
+      headers: this.headers(apiKey),
+      body: JSON.stringify({
+        model: model || "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "Rank GitHub repositories for the user's request. Return strict JSON only: {\"matches\":[{\"id\":number|string,\"score\":0-100,\"reason\":string}]}. Include only useful matches, best first. Never invent IDs."
+          },
+          { role: "user", content: JSON.stringify({ query, repositories: compact }) }
+        ],
+        temperature: 0,
+        response_format: { type: "json_object" }
+      })
     });
+    if (!response.ok) throw new Error(`Custom API error: ${await this.readError(response)}`);
+    const payload = await response.json().catch(() => null);
+    const parsed = this.parseResponseContent(payload?.choices?.[0]?.message?.content);
+    const matches = Array.isArray(parsed) ? parsed : parsed?.matches;
+    if (!Array.isArray(matches)) throw new Error("The API response does not contain a matches array.");
 
-    const filtered = scored.filter(r => r.aiScore > 0).sort((a, b) => b.aiScore - a.aiScore);
+    const byId = new Map(repos.map((repo) => [String(repo.id), repo]));
+    const seen = new Set();
+    return matches.flatMap((match) => {
+      const key = String(match?.id ?? "");
+      const repo = byId.get(key);
+      if (!repo || seen.has(key)) return [];
+      seen.add(key);
+      const numeric = Number(match.score);
+      return [{
+        ...repo,
+        relevance_score: Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 50,
+        match_reason: typeof match.reason === "string" ? match.reason : ""
+      }];
+    });
+  },
 
-    return {
-      reasoning: `Dahili Akıllı Arama: "${query}" için ${filtered.length} sonuç bulundu.`,
-      matchedRepos: filtered
-    };
+  tokenize(value) {
+    return String(value || "")
+      .toLocaleLowerCase("en-US")
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/[^a-z0-9+#.-]+/)
+      .filter((token) => token.length > 1);
+  },
+
+  localSearch(query, repos) {
+    const phrase = this.tokenize(query).join(" ");
+    const terms = [...new Set(this.tokenize(query))];
+    if (!terms.length) return repos.slice();
+    const asksRecent = terms.some((term) => ["recent", "recently", "latest", "updated", "new", "newest"].includes(term));
+    const now = Date.now();
+
+    return repos.map((repo) => {
+      const name = this.tokenize(repo.name).join(" ");
+      const fullName = this.tokenize(repo.full_name).join(" ");
+      const description = this.tokenize(repo.description).join(" ");
+      const language = this.tokenize(repo.language).join(" ");
+      const topics = this.tokenize((repo.topics || []).join(" ")).join(" ");
+      let score = 0;
+      if (name === phrase || fullName === phrase) score += 100;
+      else if (name.includes(phrase) || fullName.includes(phrase)) score += 55;
+
+      for (const term of terms) {
+        if (name.includes(term)) score += 30;
+        if (fullName.includes(term)) score += 14;
+        if (description.includes(term)) score += 15;
+        if (language === term || language.includes(term)) score += 24;
+        if (topics.includes(term)) score += 22;
+      }
+      const updated = Date.parse(repo.updated_at || 0);
+      if (asksRecent && Number.isFinite(updated)) {
+        const days = Math.max(0, (now - updated) / 86_400_000);
+        score += Math.max(0, 24 - Math.log2(days + 1) * 3);
+      }
+      return { ...repo, _score: score };
+    })
+      .filter((repo) => repo._score > 0)
+      .sort((a, b) => b._score - a._score || Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0) || String(a.full_name || a.name).localeCompare(String(b.full_name || b.name)))
+      .map(({ _score, ...repo }) => ({ ...repo, relevance_score: Math.min(100, Math.round(_score)) }));
   }
 };
+
+globalThis.AIService = AIService;
+if (typeof module !== "undefined") module.exports = AIService;
