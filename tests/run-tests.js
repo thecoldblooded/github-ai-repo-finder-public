@@ -157,9 +157,10 @@ async function response(data, ok = true, status = 200) {
     assert.doesNotMatch(source, /Reconnect GitHub to grant private repository access\.\", "warning"\);\s*return;/);
   });
 
-  await test("custom endpoint sends only compact repository metadata", async () => {
+  await test("custom endpoint sends only compact repository metadata and stream:false", async () => {
     global.fetch = async (url, options) => {
       const payload = JSON.parse(options.body);
+      assert.equal(payload.stream, false);
       const bodyText = JSON.stringify(payload);
       assert.ok(bodyText.includes("repo-one"));
       assert.ok(!bodyText.includes("secret_field"));
@@ -170,5 +171,33 @@ async function response(data, ok = true, status = 200) {
     assert.equal(result[0].id, 1);
   });
 
+  await test("testConnection sends stream:false and handles reasoning models", async () => {
+    global.fetch = async (url, options) => {
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.stream, false);
+      return response({ choices: [{ message: { role: "assistant", reasoning_content: "OK" } }] });
+    };
+    const res = await ai.testConnection("https://example.com/v1", "key", "model");
+    assert.equal(res.success, true);
+  });
+
+  await test("custom endpoint retries without response_format when provider returns 400", async () => {
+    let attempts = 0;
+    global.fetch = async (url, options) => {
+      attempts++;
+      const payload = JSON.parse(options.body);
+      if (attempts === 1) {
+        assert.ok(payload.response_format);
+        return response({ error: { message: "StructuredOutputsParams invalid" } }, false, 400);
+      }
+      assert.equal(payload.response_format, undefined);
+      assert.equal(payload.stream, false);
+      return response({ choices: [{ message: { content: JSON.stringify({ matches: [{ id: 1, score: 80, reason: "ok" }] }) } }] });
+    };
+    const repos = [{ id: 1, name: "repo-one", full_name: "me/repo-one" }];
+    const result = await ai.callAIEndpoint("repo", repos, "https://example.com/v1", "key", "model");
+    assert.equal(result[0].id, 1);
+    assert.equal(attempts, 2);
+  });
   if (!process.exitCode) console.log(`\n${passed} tests passed`);
 })();

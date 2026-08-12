@@ -37,12 +37,17 @@ const AIService = {
           model: model || "gpt-4o-mini",
           messages: [{ role: "user", content: "Reply with OK." }],
           temperature: 0,
-          max_tokens: 8
+          max_tokens: 8,
+          stream: false
         })
       });
       if (!response.ok) return { success: false, message: `Connection failed: ${await this.readError(response)}` };
       const data = await response.json().catch(() => null);
-      if (!data?.choices?.[0]?.message?.content) return { success: false, message: "The endpoint did not return an OpenAI-compatible response." };
+      const msg = data?.choices?.[0]?.message;
+      const content = msg?.content ?? msg?.reasoning_content;
+      if (typeof content !== "string" && !msg) {
+        return { success: false, message: "The endpoint did not return an OpenAI-compatible response." };
+      }
       return { success: true, message: "Connection works." };
     } catch (error) {
       return { success: false, message: error.message || "Connection failed." };
@@ -95,10 +100,8 @@ const AIService = {
 
   async callAIEndpoint(query, repos, endpoint, apiKey, model) {
     const compact = repos.slice(0, 1000).map((repo) => this.compactRepository(repo));
-    const response = await fetch(this.normalizeEndpoint(endpoint), {
-      method: "POST",
-      headers: this.headers(apiKey),
-      body: JSON.stringify({
+    const createBody = (includeResponseFormat) => {
+      const body = {
         model: model || "gpt-4o-mini",
         messages: [
           {
@@ -108,12 +111,33 @@ const AIService = {
           { role: "user", content: JSON.stringify({ query, repositories: compact }) }
         ],
         temperature: 0,
-        response_format: { type: "json_object" }
-      })
+        stream: false
+      };
+      if (includeResponseFormat) {
+        body.response_format = { type: "json_object" };
+      }
+      return JSON.stringify(body);
+    };
+
+    let response = await fetch(this.normalizeEndpoint(endpoint), {
+      method: "POST",
+      headers: this.headers(apiKey),
+      body: createBody(true)
     });
+
+    if (!response.ok && (response.status === 400 || response.status === 422)) {
+      response = await fetch(this.normalizeEndpoint(endpoint), {
+        method: "POST",
+        headers: this.headers(apiKey),
+        body: createBody(false)
+      });
+    }
+
     if (!response.ok) throw new Error(`Custom API error: ${await this.readError(response)}`);
     const payload = await response.json().catch(() => null);
-    const parsed = this.parseResponseContent(payload?.choices?.[0]?.message?.content);
+    const messageObj = payload?.choices?.[0]?.message;
+    const content = messageObj?.content ?? messageObj?.reasoning_content;
+    const parsed = this.parseResponseContent(content);
     const matches = Array.isArray(parsed) ? parsed : parsed?.matches;
     if (!Array.isArray(matches)) throw new Error("The API response does not contain a matches array.");
 
