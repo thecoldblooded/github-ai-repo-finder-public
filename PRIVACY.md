@@ -52,4 +52,4 @@ Material changes to this policy will be reflected by updating the effective date
 
 ## Contact
 
-Before publication, replace this paragraph with a monitored support email address or public support URL controlled by the developer.
+If you have any questions or privacy concerns regarding this extension, please contact `umut.dogan91@windowslive.com`.
