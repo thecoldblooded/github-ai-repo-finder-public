@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>AI Repo Finder Real Runner</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      overflow: hidden !important;
+      background: #050806 !important;
+      font-family: var(--sans);
+    }
+    .chrome-window-frame {
+      width: 100vw;
+      height: 100vh;
+      background: #090d0a;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+    .chrome-top-bar {
+      height: 44px;
+      background: #151b16;
+      border-bottom: 1px solid #303a31;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 16px;
+    }
+    .mac-dots {
+      display: flex;
+      gap: 8px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .dot-red { background: #ff5f56; }
+    .dot-yellow { background: #ffbd2e; }
+    .dot-green { background: #27c93f; }
+    .url-bar {
+      flex: 1;
+      background: #0d120e;
+      border: 1px solid #303a31;
+      border-radius: 8px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      font-size: 13px;
+      color: #a6b0a6;
+      font-family: var(--mono);
+    }
+    .main-viewport {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: radial-gradient(circle at center, #111812 0%, #080c09 100%);
+    }
+    /* Extension container mockup centered in viewport */
+    .extension-popup-frame {
+      width: 480px;
+      height: 640px;
+      background: var(--bg);
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      margin: 0 auto;
+    }
+    .extension-popup-frame .app-shell {
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+
+<script>
+  // MOCK CHROME STORAGE ENVIRONMENT BEFORE ANY EXTENSION SCRIPT RUNS
+  const SEEDED_REPOS = [
+    {
+      id: 101,
+      name: "oh-my-pi",
+      full_name: "can1357/oh-my-pi",
+      description: "AI Coding agent for the terminal — hash-anchored edits, optimized tool harness, LSP, Python, browser, subagents, and more.",
+      html_url: "https://github.com/can1357/oh-my-pi",
+      language: "TypeScript",
+      topics: ["ai-agent", "coding-assistant", "terminal-ui", "lsp"],
+      stargazers_count: 1420,
+      forks_count: 88,
+      updated_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+      private: false,
+      fork: false,
+      owner: "can1357"
+    },
+    {
+      id: 102,
+      name: "github-ai-repo-finder",
+      full_name: "umutdogan/github-ai-repo-finder",
+      description: "Search your GitHub repositories locally or with an OpenAI-compatible API you choose.",
+      html_url: "https://github.com/umutdogan/github-ai-repo-finder",
+      language: "JavaScript",
+      topics: ["chrome-extension", "github-api", "openai-api", "local-search"],
+      stargazers_count: 85,
+      forks_count: 12,
+      updated_at: new Date().toISOString(),
+      private: false,
+      fork: false,
+      owner: "umutdogan"
+    },
+    {
+      id: 103,
+      name: "omniroute",
+      full_name: "umutdogan/omniroute",
+      description: "AI Gateway for Multi-Provider LLMs with fallback, rate limiting, and observability.",
+      html_url: "https://github.com/umutdogan/omniroute",
+      language: "Go",
+      topics: ["ai-gateway", "llm-router", "microservice", "golang"],
+      stargazers_count: 312,
+      forks_count: 24,
+      updated_at: new Date(Date.now() - 3 * 86400 * 1000).toISOString(),
+      private: false,
+      fork: false,
+      owner: "umutdogan"
+    },
+    {
+      id: 104,
+      name: "caveman",
+      full_name: "JuliusBrussee/caveman",
+      description: "🪨 Claude Code skill that cuts 65% of tokens by talking like caveman.",
+      html_url: "https://github.com/JuliusBrussee/caveman",
+      language: "TypeScript",
+      topics: ["claude-code", "prompt-engineering", "token-optimization"],
+      stargazers_count: 340,
+      forks_count: 18,
+      updated_at: new Date(Date.now() - 86400 * 1000).toISOString(),
+      private: false,
+      fork: false,
+      owner: "JuliusBrussee"
+    },
+    {
+      id: 105,
+      name: "nim-integrations",
+      full_name: "NVIDIA/nim-integrations",
+      description: "Integration blueprints and starter kits for NVIDIA NIM microservices.",
+      html_url: "https://github.com/NVIDIA/nim-integrations",
+      language: "Python",
+      topics: ["nvidia-nim", "llm-deployment", "python"],
+      stargazers_count: 540,
+      forks_count: 62,
+      updated_at: new Date(Date.now() - 4 * 86400 * 1000).toISOString(),
+      private: false,
+      fork: false,
+      owner: "NVIDIA"
+    },
+    {
+      id: 106,
+      name: "react-dash-kit",
+      full_name: "umutdogan/react-dash-kit",
+      description: "Reusable dashboard components and layout primitives for React & Next.js.",
+      html_url: "https://github.com/umutdogan/react-dash-kit",
+      language: "TypeScript",
+      topics: ["react", "dashboard", "components", "tailwind"],
+      stargazers_count: 142,
+      forks_count: 9,
+      updated_at: new Date(Date.now() - 5 * 86400 * 1000).toISOString(),
+      private: false,
+      fork: false,
+      owner: "umutdogan"
+    }
+  ];
+
+  const MOCK_STORAGE = {
+    repo_finder_auth: {
+      accessToken: "gho_mock1234567890abcdef",
+      tokenType: "bearer",
+      scope: "repo",
+      user: {
+        login: "umut.dog91",
+        avatar_url: "https://avatars.githubusercontent.com/u/1000000",
+        name: "Umut Doğan"
+      }
+    },
+    repo_finder_settings: {
+      theme: "dark",
+      includePrivate: true,
+      includeStarred: true,
+      includeForks: true,
+      includeArchived: false,
+      apiEnabled: false,
+      apiEndpoint: "https://api.openai.com/v1",
+      apiKey: "sk-proj-1234567890abcdef",
+      apiModel: "gpt-4o-mini"
+    },
+    github_repo_cache: {
+      timestamp: Date.now(),
+      repos: SEEDED_REPOS
+    }
+  };
+
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get: (keys) => {
+          if (!keys) return Promise.resolve({ ...MOCK_STORAGE });
+          const res = {};
+          const keyList = Array.isArray(keys) ? keys : [keys];
+          keyList.forEach(k => { if (k in MOCK_STORAGE) res[k] = MOCK_STORAGE[k]; });
+          return Promise.resolve(res);
+        },
+        set: (obj) => {
+          Object.assign(MOCK_STORAGE, obj);
+          return Promise.resolve();
+        },
+        remove: (keys) => {
+          const keyList = Array.isArray(keys) ? keys : [keys];
+          keyList.forEach(k => delete MOCK_STORAGE[k]);
+          return Promise.resolve();
+        }
+      }
+    },
+    runtime: {
+      id: "ekknkakaapcenmoihapnmhocngkljeph",
+      getManifest: () => ({ version: "2.0.2" })
+    },
+    sidePanel: {
+      open: () => Promise.resolve()
+    }
+  };
+</script>
+
+<div class="chrome-window-frame">
+  <div class="chrome-top-bar">
+    <div class="mac-dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="url-bar" id="chrome-url-bar">chrome-extension://ekknkakaapcenmoihapnmhocngkljeph/popup.html</div>
+  </div>
+
+  <div class="main-viewport">
+    <div class="extension-popup-frame" id="extension-frame">
+      <!-- 100% VERBATIM APP-SHELL FROM POPUP.HTML -->
+      <div class="app-shell">
+        <header class="app-header">
+          <button id="btn-home" class="brand" type="button" aria-label="Open repository search">
+            <span class="brand-mark" aria-hidden="true">⌕</span>
+            <span>
+              <strong>AI Repo Finder</strong>
+              <small>YOUR GITHUB INDEX</small>
+            </span>
+          </button>
+          <div class="header-actions">
+            <span id="search-mode-badge" class="mode-badge">LOCAL</span>
+            <button id="btn-open-sidepanel" class="icon-button" type="button" title="Open in side panel" aria-label="Open in side panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>
+            </button>
+            <button id="btn-theme" class="icon-button" type="button" title="Toggle theme" aria-label="Toggle theme">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path></svg>
+            </button>
+            <button id="btn-settings" class="icon-button" type="button" title="Settings" aria-label="Open settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.35.72.6 1 .3.3.7.44 1.1.4h.09v4h-.09a1.7 1.7 0 0 0-1.7.6Z"></path></svg>
+            </button>
+          </div>
+        </header>
+
+        <main id="main-content">
+          <section id="search-view" class="view" aria-labelledby="search-heading">
+            <div class="search-intro">
+              <p class="eyebrow">PERSONAL CODE CATALOG</p>
+              <h1 id="search-heading">Find the repo you meant.</h1>
+              <p>Search names, descriptions, topics, and languages across your GitHub library.</p>
+            </div>
+
+            <form id="search-form" class="search-box" role="search">
+              <label class="sr-only" for="search-input">Search repositories</label>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+              <input id="search-input" type="search" placeholder='Try "TypeScript CLI updated recently"' autocomplete="off" spellcheck="false">
+              <button id="btn-clear" class="clear-button" type="button" aria-label="Clear search" hidden>×</button>
+              <button id="btn-search" class="search-button" type="submit">Search</button>
+            </form>
+
+            <div class="tool-row">
+              <label class="select-label" for="language-filter">Language</label>
+              <select id="language-filter"><option value="all">All languages</option></select>
+              <label id="enhanced-toggle-wrap" class="check-chip" title="Use your configured OpenAI-compatible API">
+                <input id="enhanced-search" type="checkbox">
+                <span>Enhanced</span>
+              </label>
+              <span id="repo-count" class="repo-count">0 repos</span>
+            </div>
+
+            <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+            <div id="loading-state" class="state-panel" aria-live="polite" hidden>
+              <span class="spinner" aria-hidden="true"></span>
+              <p>Searching your index…</p>
+            </div>
+
+            <div id="welcome-state" class="state-panel welcome-state">
+              <div class="index-glyph" aria-hidden="true"><span>01</span><span>10</span><span>11</span></div>
+              <h2>Your code, indexed locally</h2>
+              <p id="welcome-copy">Connect GitHub in settings, then sync your repositories.</p>
+              <button id="btn-welcome-action" class="button button-primary" type="button">Connect GitHub</button>
+              <div class="prompt-list" aria-label="Example searches">
+                <button type="button" data-prompt="React dashboard">React dashboard</button>
+                <button type="button" data-prompt="Python automation">Python automation</button>
+                <button type="button" data-prompt="updated recently">updated recently</button>
+              </div>
+            </div>
+
+            <div id="empty-results" class="state-panel" hidden>
+              <span class="empty-mark" aria-hidden="true">∅</span>
+              <h2>No matching repositories</h2>
+              <p>Try a broader phrase or switch back to all languages.</p>
+            </div>
+
+            <section id="results-section" aria-labelledby="results-heading" hidden>
+              <div class="results-heading">
+                <h2 id="results-heading">Matches</h2>
+                <span id="result-count">0 results</span>
+              </div>
+              <div id="repo-list" class="repo-list"></div>
+            </section>
+          </section>
+
+          <section id="settings-view" class="view settings-view" aria-labelledby="settings-heading" hidden tabindex="-1">
+            <div class="settings-titlebar">
+              <div>
+                <p class="eyebrow">CONFIGURATION</p>
+                <h1 id="settings-heading">Settings</h1>
+              </div>
+              <button id="btn-close-settings" class="button button-quiet" type="button">← Search</button>
+            </div>
+
+            <div id="settings-notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+            <section class="settings-card" aria-labelledby="github-heading">
+              <div class="card-heading">
+                <span class="step-number">01</span>
+                <div><h2 id="github-heading">GitHub connection</h2><p>Secure OAuth Device Flow. No personal access token required.</p></div>
+                <span id="github-status" class="connection-pill">NOT CONNECTED</span>
+              </div>
+
+              <div id="github-signed-out">
+                <button id="btn-connect-github" class="button button-primary" type="button">Connect GitHub</button>
+                <p id="oauth-config-help" class="field-help">You will approve a short code on github.com. The extension never receives your password.</p>
+              </div>
+
+              <div id="device-flow" class="device-flow" hidden>
+                <p class="device-instruction">Enter this one-time code on GitHub:</p>
+                <div class="device-code-row">
+                  <code id="device-code">••••-••••</code>
+                  <button id="btn-copy-code" class="button button-quiet" type="button">Copy</button>
+                </div>
+                <a id="verification-link" class="button button-primary" href="https://github.com/login/device" target="_blank" rel="noreferrer">Open GitHub verification ↗</a>
+                <div class="button-row">
+                  <button id="btn-check-authorization" class="button" type="button">I've authorized</button>
+                  <button id="btn-cancel-authorization" class="button button-quiet" type="button">Cancel</button>
+                </div>
+                <p id="device-expiry" class="field-help"></p>
+              </div>
+
+              <div id="github-signed-in" hidden>
+                <div class="account-row">
+                  <img id="github-avatar" alt="" width="40" height="40">
+                  <div><strong id="github-name"></strong><a id="github-profile" target="_blank" rel="noreferrer"></a></div>
+                </div>
+                <div class="sync-row">
+                  <span id="last-sync">Never synced</span>
+                  <button id="btn-sync" class="button" type="button">Sync now</button>
+                  <button id="btn-disconnect" class="button button-danger" type="button">Disconnect</button>
+                </div>
+              </div>
+
+              <fieldset class="option-grid">
+                <legend>Repository scope</legend>
+                <label><input id="include-private" type="checkbox"><span><strong>Private repositories</strong><small>Requests GitHub’s repo scope on next connection</small></span></label>
+                <label><input id="include-starred" type="checkbox"><span><strong>Starred repositories</strong><small>Add repositories you have starred</small></span></label>
+                <label><input id="include-forks" type="checkbox"><span><strong>Forks</strong><small>Include forked repositories</small></span></label>
+                <label><input id="include-archived" type="checkbox"><span><strong>Archived</strong><small>Include archived repositories</small></span></label>
+              </fieldset>
+            </section>
+
+            <section class="settings-card" aria-labelledby="api-heading">
+              <div class="card-heading">
+                <span class="step-number">02</span>
+                <div><h2 id="api-heading">Optional enhanced search</h2><p>Use an API you provide. Local search always remains available.</p></div>
+                <label class="switch"><input id="api-enabled" type="checkbox" aria-label="Enable enhanced search API"><span aria-hidden="true"></span></label>
+              </div>
+              <div id="api-fields" class="api-fields">
+                <label for="api-endpoint">OpenAI-compatible endpoint</label>
+                <input id="api-endpoint" type="url" placeholder="https://api.example.com/v1" autocomplete="url">
+                <label for="api-key">API key <span>optional for local servers</span></label>
+                <div class="secret-field"><input id="api-key" type="password" placeholder="Stored only on this device" autocomplete="off"><button id="btn-toggle-key" type="button" aria-label="Show API key">Show</button></div>
+                <label for="api-model">Model</label>
+                <input id="api-model" type="text" placeholder="gpt-4o-mini" autocomplete="off">
+                <div class="button-row">
+                  <button id="btn-test-api" class="button" type="button">Test connection</button>
+                  <span id="api-test-result" class="inline-status" role="status" aria-live="polite"></span>
+                </div>
+                <p class="field-help">When enabled, your query and compact repository metadata are sent directly to this endpoint. We run no proxy or analytics server.</p>
+              </div>
+            </section>
+
+            <section class="settings-card compact-card" aria-labelledby="data-heading">
+              <div class="card-heading">
+                <span class="step-number">03</span>
+                <div><h2 id="data-heading">Local data</h2><p>Settings, credentials, and cached metadata stay in Chrome storage on this device. This independent extension is not affiliated with GitHub or any AI provider.</p></div>
+              </div>
+              <button id="btn-clear-cache" class="button button-danger" type="button">Clear repository cache</button>
+            </section>
+
+            <div class="settings-footer">
+              <span id="version">Version</span>
+              <a href="PRIVACY.md" target="_blank">Privacy</a>
+              <button id="btn-save-settings" class="button button-primary" type="button">Save settings</button>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LOAD EXTENSION CORE SCRIPTS -->
+<script src="config.js"></script>
+<script src="github-auth.js"></script>
+<script src="github-service.js"></script>
+<script src="ai-service.js"></script>
+<script src="popup.js"></script>
+
+<script>
+  // REAL SCENE CONTROLLER TO SETUP EXACT APP STATES
+  function setupScene(sceneId) {
+    const notice = document.getElementById('notice');
+    if (notice) notice.hidden = true;
+
+    if (sceneId === 'scene1') {
+      // SCENE 1: Welcome Home Screen (764 repos indexed - Image #2)
+      document.documentElement.dataset.theme = 'dark';
+      document.getElementById('chrome-url-bar').textContent = 'chrome-extension://ekknkakaapcenmoihapnmhocngkljeph/popup.html (Home View)';
+      document.getElementById('search-input').value = '';
+      document.getElementById('welcome-state').hidden = false;
+      document.getElementById('results-section').hidden = true;
+      document.getElementById('settings-view').hidden = true;
+      document.getElementById('search-view').hidden = false;
+      document.getElementById('search-mode-badge').textContent = 'LOCAL';
+      document.getElementById('welcome-copy').textContent = '764 repositories are ready. Search above or sync to refresh your index.';
+    } else if (sceneId === 'scene2') {
+      // SCENE 2: Real Local Search Results (Query: "TypeScript CLI tools")
+      document.documentElement.dataset.theme = 'dark';
+      document.getElementById('chrome-url-bar').textContent = 'chrome-extension://ekknkakaapcenmoihapnmhocngkljeph/popup.html (Local Search Results)';
+      document.getElementById('search-input').value = 'TypeScript CLI tools';
+      document.getElementById('welcome-state').hidden = true;
+      document.getElementById('search-view').hidden = false;
+      document.getElementById('results-section').hidden = false;
+      document.getElementById('settings-view').hidden = true;
+      document.getElementById('search-mode-badge').textContent = 'LOCAL';
+      
+      state.repos = SEEDED_REPOS;
+      renderResults(SEEDED_REPOS.filter(r => r.language === 'TypeScript' || r.name.includes('oh-my-pi')), 'TypeScript CLI tools');
+    } else if (sceneId === 'scene3') {
+      // SCENE 3: Enhanced AI Search Mode Active
+      document.documentElement.dataset.theme = 'dark';
+      document.getElementById('chrome-url-bar').textContent = 'chrome-extension://ekknkakaapcenmoihapnmhocngkljeph/popup.html (Enhanced AI Search)';
+      document.getElementById('search-input').value = 'AI Gateway multi-provider LLM router';
+      document.getElementById('welcome-state').hidden = true;
+      document.getElementById('search-view').hidden = false;
+      document.getElementById('results-section').hidden = false;
+      document.getElementById('settings-view').hidden = true;
+      document.getElementById('search-mode-badge').textContent = 'ENHANCED AI';
+      document.getElementById('search-mode-badge').classList.add('enhanced');
+      document.getElementById('enhanced-search').checked = true;
+      
+      state.repos = SEEDED_REPOS;
+      renderResults(SEEDED_REPOS.filter(r => r.name.includes('omniroute') || r.name.includes('oh-my-pi') || r.name.includes('nim')), 'AI Gateway multi-provider LLM router');
+    } else if (sceneId === 'scene4') {
+      // SCENE 4: Real Settings Panel View (Image #3 & #4)
+      document.documentElement.dataset.theme = 'dark';
+      document.getElementById('chrome-url-bar').textContent = 'chrome-extension://ekknkakaapcenmoihapnmhocngkljeph/popup.html (Settings Panel)';
+      document.getElementById('search-view').hidden = true;
+      document.getElementById('settings-view').hidden = false;
+      document.getElementById('github-status').textContent = 'CONNECTED';
+      document.getElementById('github-status').classList.add('connected');
+      document.getElementById('github-signed-in').hidden = false;
+      document.getElementById('github-signed-out').hidden = true;
+      document.getElementById('github-name').textContent = 'Umut Doğan';
+      document.getElementById('github-profile').textContent = '@umut.dog91';
+      document.getElementById('include-private').checked = true;
+      document.getElementById('include-starred').checked = true;
+      document.getElementById('include-forks').checked = true;
+      document.getElementById('api-enabled').checked = true;
+      document.getElementById('api-endpoint').value = 'https://api.openai.com/v1';
+      document.getElementById('api-model').value = 'gpt-4o-mini';
+      document.getElementById('api-key').value = 'sk-proj-1234567890abcdef';
+    } else if (sceneId === 'scene5') {
+      // SCENE 5: Light Theme Mode View (Image #1)
+      document.documentElement.dataset.theme = 'light';
+      document.getElementById('chrome-url-bar').textContent = 'chrome-extension://ekknkakaapcenmoihapnmhocngkljeph/popup.html (Light Theme Home)';
+      document.getElementById('search-input').value = '';
+      document.getElementById('welcome-state').hidden = false;
+      document.getElementById('results-section').hidden = true;
+      document.getElementById('settings-view').hidden = true;
+      document.getElementById('search-view').hidden = false;
+      document.getElementById('search-mode-badge').textContent = 'LOCAL';
+      document.getElementById('welcome-copy').textContent = '764 repositories are ready. Search above or sync to refresh your index.';
+    }
+  }
+</script>
+
+</body>
+</html>

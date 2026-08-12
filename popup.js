@@ -173,7 +173,7 @@ function renderSettings() {
   $("api-model").value = s.apiModel;
   setApiFieldsEnabled();
   renderAuth();
-  $("version").textContent = `Version ${chrome?.runtime?.getManifest?.().version || "2.0.0"}`;
+  $("version").textContent = `Version ${chrome?.runtime?.getManifest?.().version || "2.0.2"}`;
 }
 
 function authClientConfigured() {
@@ -188,6 +188,13 @@ function renderAuth() {
   $("github-status").textContent = connected ? "CONNECTED" : (state.deviceSession ? "PENDING" : "NOT CONNECTED");
   $("github-status").classList.toggle("connected", connected);
   $("btn-connect-github").disabled = !authClientConfigured();
+
+  if (state.deviceSession) {
+    const session = state.deviceSession;
+    $("device-code").textContent = session.userCode || session.user_code || "";
+    $("verification-link").href = session.verificationUri || session.verification_uri || "https://github.com/login/device";
+    $("device-expiry").textContent = `Code expires in about ${Math.max(1, Math.round((session.expiresIn || session.expires_in || 900) / 60))} minutes.`;
+  }
 
   const help = $("oauth-config-help");
   if (help) {
@@ -472,9 +479,6 @@ async function beginGitHubConnection() {
     const session = await GitHubAuth.startDeviceFlow(scopes);
     state.deviceSession = session;
     await storageSet({ [DEVICE_SESSION_KEY]: session });
-    $("device-code").textContent = session.userCode || session.user_code;
-    $("verification-link").href = session.verificationUri || session.verification_uri || "https://github.com/login/device";
-    $("device-expiry").textContent = `Code expires in about ${Math.max(1, Math.round((session.expiresIn || session.expires_in || 900) / 60))} minutes.`;
     renderAuth();
     window.open($("verification-link").href, "_blank", "noopener");
   } catch (error) {

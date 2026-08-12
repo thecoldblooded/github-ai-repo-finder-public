@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Repo Finder for GitHub",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "Search your GitHub repositories locally or with an OpenAI-compatible API you provide.",
   "permissions": [
     "storage",
